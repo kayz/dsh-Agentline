@@ -529,6 +529,17 @@ async function cmdMerge() {
   log(`state: ${next.status}`)
 }
 
+async function cmdCheck() {
+  const script = path.resolve(__dirname, '..', 'AgentLine', 'tools', 'check-task.ps1')
+  if (!fs.existsSync(script)) fail(`check-task.ps1 not found: ${script}`)
+  const argv = ['-NoProfile', '-File', script, '-RepoRoot', repo, '-TaskDir', taskDirRel]
+  if (args.strict) argv.push('-Strict')
+  if (args.lenient) argv.push('-Lenient')
+  const { spawn } = await import('node:child_process')
+  const child = spawn('pwsh', argv, { cwd: repo, stdio: 'inherit', windowsHide: false })
+  child.on('close', (code) => process.exit(code ?? 1))
+}
+
 async function cmdStop() {
   const lock = readLock(repo)
   if (!lock || !isPidAlive(lock.pid)) {
@@ -564,6 +575,7 @@ function help() {
   node agentline.mjs flow  --task <id> [--max-rounds 2] [--resume]
   node agentline.mjs merge --task <id> --permission "允许合并"
   node agentline.mjs stop  --task <id> [--now]
+  node agentline.mjs check --task <id> [--strict|--lenient]
   node agentline.mjs status --task <id>
 
 公共参数：
@@ -584,8 +596,10 @@ switch (cmd) {
   case 'flow': await cmdFlow(); break
   case 'merge': await cmdMerge(); break
   case 'stop': await cmdStop(); break
+  case 'check': await cmdCheck(); break
   case 'help': case '--help': case undefined: help(); break
   default: help(); process.exit(2)
 }
+
 
 

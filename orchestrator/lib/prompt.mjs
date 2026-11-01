@@ -39,8 +39,8 @@ export function buildPrompt({ role, repo, dir, taskId, round = 1, mailbox = '', 
   const rule = `规格以 design.md 与 acceptance.md 为准，不要自行发明任何字段、版本号或章节名。`
 
   const roleHint = {
-    design: '你的产出是给下游角色看的：方案要可执行，验收标准必须写成「命令 + 期望输出」，每条命令都能独立判定通过或失败。若 brief 里给了基准 commit sha 或既有验收报告路径，验收标准应引用它们。',
-    dev: '严格按 design.md 实现，并让 acceptance.md 里每一条命令都能通过；完成后在 impl.md 里说明改了什么、为什么、如何自测。若 brief 指定了文档路径（例如验收报告），按约定在该文档追加小节。',
+    design: '你的产出是给下游角色看的：方案要可执行，验收标准必须写成「命令 + 期望输出」，每条命令都能独立判定通过或失败。若 brief 里给了基准 commit sha 或既有验收报告路径，验收标准应引用它们。另外在 design.md 顶部用 YAML front matter 声明 write_scope（相对仓库根，* 单段、** 多段），check-task 会据此校验写入范围。',
+    dev: '严格按 design.md 实现，只写 write_scope 允许的路径；让 acceptance.md 里每一条命令都能通过；完成后在 impl.md 里说明改了什么、为什么、如何自测。若 brief 指定了文档路径（例如验收报告），按约定在该文档追加小节。',
     review: '逐条核对 acceptance.md，独立判断是否真的满足（不要只看文件存在）。发现问题就判 needs_revision 并写成 findings（severity 用 P0/P1/P2）；全部满意才判 pass。 '
       + 'verdict 必须写明 so 验证的 git sha、通过数/总数、以及每条结论的证据（命令输出或文件行号）。'
       + '若 brief 指定了验收报告路径，把本轮结论追加到该文档（不要改历史小节）。'
@@ -73,5 +73,6 @@ export function buildPrompt({ role, repo, dir, taskId, round = 1, mailbox = '', 
   }
   return parts.join('\n')
 }
+
 
 

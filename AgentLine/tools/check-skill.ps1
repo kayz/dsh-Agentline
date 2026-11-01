@@ -116,7 +116,7 @@ try {
     $issues.Clear()
     if ($readError) { $issues.Add($readError) }
     else {
-        foreach ($heading in '## 何时使用', '## 角色', '## 交接文件', '## 流程', '## 规则') {
+        foreach ($heading in '## 何时使用', '## 角色', '## 交接文件', '## 状态与产物', '## 流程', '## 规则') {
             if (-not [regex]::IsMatch($body, ('(?m)^' + [regex]::Escape($heading) + '[ \t]*$'))) {
                 $issues.Add("missing heading: $heading")
             }
@@ -136,7 +136,7 @@ try {
     $issues.Clear()
     if ($readError) { $issues.Add($readError) }
     else {
-        foreach ($name in 'brief.md', 'design.md', 'acceptance.md', 'impl.md', 'review.md', 'state.json', 'run.log') {
+        foreach ($name in 'brief.md', 'design.md', 'acceptance.md', 'impl.md', 'review.md', 'state.json', 'run.log', 'run.json', 'ci-results.json', 'verdict.json') {
             if (-not $body.Contains($name)) { $issues.Add("missing file name: $name") }
         }
     }
@@ -171,8 +171,17 @@ try {
     }
     Show-Check -Id C8 -Label 'templates' -Issues ($issues.ToArray())
 
+    $issues.Clear()
+    if ($readError) { $issues.Add($readError) }
+    else {
+        foreach ($needle in 'status', 'draft', 'pr_open', 'merged', 'git_sha', 'write_scope', 'check-task.ps1', 'run.json', 'ci-results.json', 'verdict.json') {
+            if (-not $body.Contains($needle)) { $issues.Add("missing orchestrator detail: $needle") }
+        }
+    }
+    Show-Check -Id C9 -Label 'orchestrator schema' -Issues ($issues.ToArray())
+
     if ($script:failedChecks -gt 0) {
-        Write-Output ("FAIL: $script:failedChecks/8 checks failed")
+        Write-Output ("FAIL: $script:failedChecks/9 checks failed")
         exit 1
     }
     Write-Output 'PASS'

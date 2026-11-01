@@ -1,7 +1,7 @@
 ---
 name: AgentLine
 description: 设计→开发→验证三角色协作协议。当任务需要不同 agent 或模型分别设计、实现、验收，并通过 .collab/tasks/<NNN>/ 下的固定文件交接时使用。
-version: 0.1.0
+version: 0.2.0
 ---
 
 # AgentLine
@@ -13,7 +13,7 @@ version: 0.1.0
 - 验收需要通过可独立运行的 PowerShell 7 命令复现。
 - 需要保留设计、实现说明、验证结论与原始执行输出。
 
-单人小改动、无需独立验收的任务通常不需要本协议。本 skill 约定人工或 agent 的交接行为，不提供调度器、模型 API 调用、多任务并发或锁。
+单人小改动、无需独立验收的任务通常不需要本协议。本 skill 约定人工或 agent 的交接行为；调度器（`orchestrator/`）是可选实现，负责建分支、派活、CI、评审与交班。
 
 ## 角色
 
@@ -21,23 +21,28 @@ version: 0.1.0
 
 - 输入：brief.md。
 - 输出：design.md、acceptance.md。
-- 明确目标、非目标、写入范围和判定逻辑；禁止写产品代码。
+- 明确目标、非目标、写入范围（`write_scope`）和判定逻辑；禁止写产品代码。
 
 ### developer（开发）
 
 - 输入：brief.md、design.md、acceptance.md。
 - 输出：产品代码、impl.md，记录逐条 AC 自测结果。
 - 填写 state.json 的 dev_model；禁止修改 design.md、acceptance.md。
+- 只能写 design 的 `write_scope` 允许的路径。
 
-### verifier（验证）
+### verifier（验证；调度器中对应 review）
 
 - 输入：全部交接文件及产品代码。
-- 输出：run.log、review.md；禁止修改产品代码。
-- 填写 state.json 的 verifier_model，通过模型隔离检查后逐条执行验收命令。
+- 输出：run.log、review.md（或 review-r<N>.md）、verdict.json（或 verdict-r<N>.json）。
+- 不得修改产品代码；通过模型隔离检查后逐条执行验收命令。
 
 ## 交接文件
 
-任务目录固定为 `.collab/tasks/<NNN>/`，NNN 为三位补零编号，例如 `001`。任务目录仅放以下七个文件；从 [templates/](templates/) 取六个模板，run.log 在验证时生成。
+任务目录固定为 `.collab/tasks/<NNN>/`，NNN 为三位补零编号，例如 `001`。
+
+### 手动模式（7 个文件）
+
+从 [templates/](templates/) 取六个模板，run.log 在验证时生成。
 
 | 文件名 | 写入者 | 内容 | 写入时机 |
 |---|---|---|---|
@@ -49,40 +54,100 @@ version: 0.1.0
 | state.json | 当前阶段的角色 | task、phase、dev_model、verifier_model、round、updated | 每次阶段切换时 |
 | run.log | verifier | 每条 AC 的命令、退出码和原始输出 | verify 阶段，只追加 |
 
-state.json 的 task 是三位任务号字符串；phase 只能是 brief、design、develop、verify、done、blocked。dev_model 和 verifier_model 分别由对应角色填写实际模型标识，updated 使用 ISO 8601 时间。round 从 0 开始。
+### 调度器模式（附加机器产物）
+
+Orchestrator 模式下，任务目录还会出现：
+
+| 文件 | 写入者 | 内容 |
+|---|---|---|
+| run.json | 调度器 | 每次执行的候选、模型、effort、退出码、耗时、usage、日志路径 |
+| ci-results.json | CI | 每条 AC 的命令、退出码、原始输出、passed/total |
+| verdict.json / verdict-r<N>.json | verifier | verdict、passed/total、findings、被验收的 git_sha |
+| logs/ | 调度器 | 每次执行的原始 CLI 输出 |
+| handoff/ | 调度器 | 换候选时的 checkpoint 与交班单 |
+| notice.json | 调度器 | 任务结束通知（pr_open / merged / blocked） |
+| live.json / control.json | 调度器 | 运行中状态与控制面（运行时文件，不是证据） |
+
+## 状态与产物
+
+### 手动模式（phase）
+
+`brief` → `design` → `develop` → `verify` → `done`；超过轮次上限为 `blocked`。
+每阶段结束由当前角色更新 state.json 的 phase 与 updated；状态不会自动推进。
+
+### 调度器模式（status）
+
+`draft` → `designed` → `implemented` → `reviewable` → `reviewed` → `pr_open` → `merged`；失败为 `blocked`。
+
+调度器写 state.json 的 `id`（手动模板用 `task`），`check-task.ps1` 两者都接受。
+
+| status | 必需证据 |
+|---|---|
+| draft | brief.md、state.json |
+| designed | + design.md、acceptance.md |
+| implemented | + impl.md、run.json |
+| reviewable | + ci-results.json |
+| reviewed | + review*.md、verdict*.json |
+| pr_open | + state.pr.branch（等待人类许可合并） |
+| merged | + state.pr.sha、state.pr.permission |
+| blocked | + state.blocked_reason；已有产物保留 |
+
+### 证据与模型隔离
+
+- **没有 run.json 的执行不算数**；没有 ci-results.json 的验收不算数。
+- 模型隔离以 `run.json` 的 `model_resolved`（回退 `model_requested`）为准，不采信 state 里自填的模型名。
+- `verdict*.json` 必须包含 `verdict`、`passed`、`total`、`findings`、`git_sha`；`git_sha` 必须是当前 HEAD 的祖先。
+- 评审引用 CI 的每条命令与退出码；不能只写「我看过了」。
+
+### write_scope（机器可读的写入范围）
+
+designer 在 design.md 的 YAML front matter 里声明允许写入的路径（相对仓库根，`*` 匹配单段，`**` 匹配多段）：
+
+```markdown
+---
+write_scope:
+  - crates/app/src/**
+  - crates/app/tests/**
+---
+```
+
+developer 只能修改这些路径；`check-task.ps1` 会用 git diff 校验，越界即失败。`write_scope: []` 表示本任务不改产品代码。
 
 ## 流程
 
-1. 发起方准备 brief.md，确定任务范围，并以模板初始化 state.json，phase 为 brief。
-2. designer 阅读 brief.md，进入 design，交付 design.md 与 acceptance.md，然后将 phase 更新为 develop。
-3. developer 完整阅读上述三份文件，记录 dev_model，按设计实现并自测；完成 impl.md 后将 phase 更新为 verify。
-4. verifier 记录 verifier_model，先检查模型隔离规则，再独立执行各条 AC。每轮向 run.log 追加 `=== round <n> <ISO8601> ===`，随后追加每条命令、退出码及原始输出，并在 review.md 记录结果。
-5. 全部通过：phase 更新为 done。verify 未通过：round 加 1，phase 返回 develop，developer 根据 review.md 修复后再次交接；round 超过上限时将 phase 设为 blocked，交给人处理，上限以 `squad.yaml` 的 `review_rounds.max_rounds` 为准。
+1. 发起方准备 brief.md，确定任务范围，并以模板初始化 state.json。
+2. designer 阅读 brief.md，进入 design，交付 design.md 与 acceptance.md，声明 write_scope，然后将 phase/status 推进到下一阶段。
+3. developer 完整阅读上述文件，记录 dev_model，按设计实现并自测；完成 impl.md 后推进状态。
+4. CI 逐条执行 acceptance.md：命令退出码 0 且输出包含 `AC-n OK` 才算通过；原始输出写入 ci-results.json。
+5. verifier 记录 verifier_model，先检查模型隔离规则，再独立复核；写 review.md 与 verdict.json。
+6. 全部通过：进入 reviewed / pr_open，等待人类许可后合并。未通过：round 加 1，developer 按 findings 修复后再次交接；超过上限进入 blocked。
 
-阶段顺序为 brief → design → develop → verify → done。每个角色结束时更新 state.json 的 phase 和 updated；状态不会自动推进。
+调度器模式另有换候选交班：新的候选先读 handoff 单，明确选择保留现场继续或回滚重做，并用新产出证明不是「继承即完成」。
 
 ## 规则
 
-1. 每个角色只写自己负责的交接文件（见上表）；产品代码写入范围以 design.md 为准，state.json 由当前阶段角色维护。
-2. 验证模型不得与开发模型相同：verifier 开始前比较 state.json 的 dev_model 与 verifier_model，相同或任一为空则拒绝验证，并在 review.md 写明原因。模型标识只记录和比较，不请求 API 校验其真实性。
+1. 每个角色只写自己负责的交接文件（见上表）；产品代码写入范围以 design.md 的 write_scope 为准，state.json 由当前阶段角色或调度器维护。
+2. 验证模型不得与开发模型相同：verifier 开始前比较 dev 与 verifier 的实际模型标识；相同或任一为空则拒绝验证，并在 review.md 写明原因。调度器模式以 run.json 的 model_resolved 为准。
 3. acceptance.md 只能由 designer 修改。developer 认为某条无法执行时，在 impl.md 写明原因并退回 design，不自行修改 design.md 或 acceptance.md。
 4. 每条验收必须是 PowerShell 7 单行命令、零第三方依赖、能独立判定通过或失败；acceptance.md 使用 `## AC-n 标题`、`- 命令:`、`- 期望:` 格式。
-5. 交接文件名全部小写、固定，不加日期、前缀、后缀或版本号；修改时覆盖原文件，历史版本靠 git 保留；run.log 只能追加。
-
-## 并发约定
-
-锁由调度器 `flow` 实现，本 skill 本身不提供锁，以下只记录使用时要遵守的约定。
-
-1. 同一仓库同一时刻只允许一个 `flow` 运行。后启动的 `flow` 会打印锁持有者信息并以退出码 2 退出，不会排队等待。
-2. 锁文件为仓库根下的 `.collab/.flow.lock`，内容是 JSON，字段依次为 pid、host、at、task、cmd（持有进程号、主机、加锁时间、任务号、命令）。它是运行时文件，不属于交接文件。
-3. 遇到退出码 2 时，先在锁文件 host 对应的机器上确认 pid 对应的进程是否仍在运行：仍在运行就等它结束后再跑，不要删除锁文件；进程已死（例如被 kill -9）可直接重跑 `flow`，它会判定 pid 已死并自动接管旧锁，无需手动删除。
-4. 锁是仓库级兜底，不是替代池策略：哪些任务串行、哪些并行仍按「同池串行、跨池并行」安排；锁只保证同一仓库不会同时有两个 `flow` 进程，不改变池策略本身。
+5. 交接文件名全部小写、固定；修改时覆盖原文件，历史版本靠 git 保留；run.log 只能追加。
+6. 调度器模式下 state.json 的 status 只能由调度器或明确授权的阶段推进；手工改 status 视为伪造证据。
+7. `write_scope` 只允许缩小，不允许在开发阶段扩大；需要扩大时退回 designer 修改 design.md 并重新验收。
+8. 合并永远需要人类许可；agent 只把分支准备到 pr_open，不自我放行。
 
 ## 自检
 
-在 PowerShell 7 执行 `pwsh -NoProfile -File AgentLine/tools/check-skill.ps1`。也可使用 `-SkillRoot <path>` 指定 skill 根目录；默认不依赖当前工作目录。
+```powershell
+# 只读检查 skill 本体（C1–C9）
+pwsh -NoProfile -File AgentLine/tools/check-skill.ps1
 
-脚本只读检查本 skill 的编码、元数据、必要章节、角色、交接文件名、模型隔离规则及模板。它不检查任务目录、内容质量，也不执行任务验收；全部通过时末行输出 PASS 并退出 0。
+# 只读检查某个任务的证据链
+pwsh -NoProfile -File AgentLine/tools/check-task.ps1 -RepoRoot <repo> -TaskDir .collab/tasks/<NNN>
+```
+
+`check-task.ps1` 校验 state/run/ci/verdict、模型隔离、日志引用、write_scope 与必需产物；
+默认严格，`-Lenient` 把历史 verdict/日志缺失降级为 WARN，`-Strict` 要求 write_scope 必须存在。
+它不执行 acceptance，也不修改任何文件。
 
 ## 失败模式速查
 

@@ -73,6 +73,21 @@ brief.md  design.md  acceptance.md  impl.md  review.md  state.json  run.log
 
 **没有证据的执行不算数。** 评审引用 CI 结果与文件行号，而不是「我看了，没问题」。
 
+### 任务校验（协议 v0.2.0）
+
+`AgentLine/tools/check-task.ps1` 只读校验一个任务的证据链：
+
+```powershell
+pwsh -NoProfile -File AgentLine/tools/check-task.ps1 -RepoRoot <repo> -TaskDir .collab/tasks/<NNN>
+```
+
+它检查 state/run/ci/verdict、模型隔离（以 `run.json` 的 `model_resolved` 为准）、日志引用、
+`verdict.git_sha` 是否为 HEAD 祖先、必需产物，以及 **write_scope**：
+
+- 默认严格；`-Lenient` 把历史 verdict/日志缺失降级为 WARN；
+- `-Strict` 要求 design.md 必须声明 `write_scope`；
+- 不执行 acceptance，也不修改任何文件。
+
 ## 失败处理：换模型，也换现场
 
 - 同一角色最多切换 2 次候选模型；**不升 effort**，避免越试越贵；
@@ -103,6 +118,7 @@ node agentline.mjs preflight
 
 # 4) 在一个目标仓库里派活（人类仍需许可才合并）
 node agentline.mjs flow --repo C:\path\to\repo --task 001
+node agentline.mjs check --repo C:\path\to\repo --task 001   # 证据链校验
 node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许合并"
 ```
 
@@ -160,9 +176,10 @@ node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许�
 
 ## 仓库内容
 
-- [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（角色、交接文件、流程、规则、失败模式）；
-- [`AgentLine/templates/`](AgentLine/templates/)：六个交接文件模板；
-- [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：只读自检（C1–C8）；
+- [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（v0.2.0：状态/产物、write_scope、模型隔离）；
+- [`AgentLine/templates/`](AgentLine/templates/)：六个交接文件模板（design 含 write_scope 示例）；
+- [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：skill 只读自检（C1–C9）；
+- [`AgentLine/tools/check-task.ps1`](AgentLine/tools/check-task.ps1)：任务证据链只读校验；
 - [`orchestrator/`](orchestrator/)：调度器内核（`agentline.mjs` + `lib/` + `config/` + `test/`）；
 - [`docs/01-positioning-and-roadmap.md`](docs/01-positioning-and-roadmap.md)：定位与路线（与 DSH Super-agent 的关系）。
 

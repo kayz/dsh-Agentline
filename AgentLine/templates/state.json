@@ -1,6 +1,8 @@
 {
   "task": "001",
+  "mode": "manual",
   "phase": "brief",
+  "status": "",
   "dev_model": "",
   "verifier_model": "",
   "round": 0,
