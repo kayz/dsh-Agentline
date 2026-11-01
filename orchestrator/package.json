@@ -1,0 +1,24 @@
+{
+  "name": "dsh-agentline-orchestrator",
+  "version": "0.1.0",
+  "description": "Multi-model design → dev → CI → review orchestrator for coding CLIs",
+  "type": "module",
+  "bin": {
+    "agentline": "./agentline.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "files": [
+    "agentline.mjs",
+    "lib",
+    "config",
+    "tools",
+    "README.md"
+  ]
+}
+

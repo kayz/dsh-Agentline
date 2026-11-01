@@ -2,9 +2,14 @@
 
 > 让不同模型分别做设计、实现和验收；每一步留下可复核的证据；合并由人放行。
 
-AgentLine 是一套跑在 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）里的多模型协作工作方式。
+AgentLine 是一套跑在 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）生态里的多模型协作工作方式。
 它不追求「一句话全自动」，而是把一次改动拆成三个角色，用固定文件交接，用可执行命令验收，
 把「做完了」变成「证据在这里」。
+
+本仓库包含两层：
+
+- [`AgentLine/`](AgentLine/SKILL.md)：**协议与 skill**（角色、交接文件、验收规则、模板、自检脚本）；
+- [`orchestrator/`](orchestrator/)：**可运行的调度器内核**（Node.js 20+，零第三方依赖），负责建分支、派活、CI、评审、交班和人许可合并。
 
 ## 为什么不用一个模型从头做到尾
 
@@ -78,22 +83,97 @@ brief.md  design.md  acceptance.md  impl.md  review.md  state.json  run.log
 
 交班单是失败模型写的，只作数据；规格永远只来自 brief / design / acceptance。
 
-## 这个仓库里有什么
+## 快速开始（调度器）
+
+要求：Windows（当前版本）、Node.js 20+、PowerShell 7（CI runner 使用）、git，以及至少两个已登录的编码 CLI。
+
+```powershell
+cd orchestrator
+
+# 1) 自动发现本机各 CLI 提供的模型（不写死模型列表）
+node agentline.mjs init
+
+# 2) 从发现结果里为三个角色选模型（没有默认值，必须显式选择）
+node agentline.mjs roles set design claude-opus-5-5
+node agentline.mjs roles set dev    gpt-6.1-sol
+node agentline.mjs roles set review claude-opus-4-5
+
+# 3) 检查 provider/登录/模型/角色/CI
+node agentline.mjs preflight
+
+# 4) 在一个目标仓库里派活（人类仍需许可才合并）
+node agentline.mjs flow --repo C:\path\to\repo --task 001
+node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许合并"
+```
+
+### 模型目录是自动发现的
+
+| provider | 发现方式 | 说明 |
+|---|---|---|
+| Codex | `codex debug models` | 直接读取 CLI 自带的模型目录（slug / 显示名 / reasoning levels） |
+| CodeBuddy | `codebuddy --help` | 解析 `--model` 的帮助文本 |
+| Claude | `ANTHROPIC_API_KEY` 或扫描本机 CLI | 有 API key 时调 `/v1/models`；否则从已安装 CLI 中提取模型 id |
+| Gemini | `GEMINI_API_KEY` 或扫描本机 CLI | 有 key 时调 `models.list`；否则扫描已安装的 CLI bundle |
+
+- 发现结果写入 `orchestrator/config/agentline.models.json`（本机缓存，已被 `.gitignore` 忽略）；
+- **仓库里没有默认模型**；角色候选为空时 `preflight` 会拒绝运行；
+- 平台没给出某个模型时，可以手动补：`node agentline.mjs models add <provider> <model-id>`；
+- 发现结果只代表「本机 CLI 知道这个模型」，是否在你的套餐可用，以第一次实际调用为准。
+
+### 配置分三层
+
+| 层 | 文件 | 提交? | 内容 |
+|---|---|---|---|
+| base | `orchestrator/config/agentline.config.json` | 是 | providers、policy、空 models / 空 roles |
+| local | `orchestrator/config/agentline.local.json` | 否 | 本机命令路径、`env`、模型补充、角色选择 |
+| discovered | `orchestrator/config/agentline.models.json` | 否 | 最近一次 `models discover` 的结果 |
+
+项目级路由写在目标仓库的 `.collab/agentline.json` 的 `routing` 段；优先级：项目 > 全局 local > base。
+
+**密钥不写入配置**：只写环境变量名或依赖 CLI 自己的登录态；`preflight` 只显示 `set/unset` 与登录状态，不打印值。
+
+### 安全默认
+
+- Codex：`-s workspace-write`、`approval_policy=never`；
+- CodeBuddy：`--permission-mode acceptEdits`；
+- Claude：`--permission-mode acceptEdits` + 最小工具集；
+- Gemini：`--approval-mode auto_edit`。
+
+需要更宽的权限（如 `danger-full-access` / `bypassPermissions`）时，在 local 配置的 `providers.<name>.options` 里显式放开，风险自负。CI 会执行 `acceptance.md` 里的命令，只应在可信仓库中使用。
+
+### 本机覆盖示例
+
+```jsonc
+// orchestrator/config/agentline.local.json
+{
+  "providers": {
+    "claude": { "command": "C:/tools/claude/claude.exe" },
+    "codebuddy": { "env": { "CODEBUDDY_CONFIG_DIR": "C:/Users/me/.agentline/cbc-home" } }
+  },
+  "roles": {
+    "design": { "candidates": ["claude-opus-5-5"] },
+    "dev":    { "candidates": ["gpt-6.1-sol"] },
+    "review": { "candidates": ["claude-opus-4-5"] }
+  }
+}
+```
+
+## 仓库内容
 
 - [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（角色、交接文件、流程、规则、失败模式）；
 - [`AgentLine/templates/`](AgentLine/templates/)：六个交接文件模板；
-- [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：只读自检（C1–C8）。
+- [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：只读自检（C1–C8）；
+- [`orchestrator/`](orchestrator/)：调度器内核（`agentline.mjs` + `lib/` + `config/` + `test/`）；
+- [`docs/01-positioning-and-roadmap.md`](docs/01-positioning-and-roadmap.md)：定位与路线（与 DSH Super-agent 的关系）。
 
-## 快速开始
+## 测试
 
 ```powershell
-# 需要 PowerShell 7；脚本只读、零第三方依赖
-pwsh -NoProfile -File AgentLine/tools/check-skill.ps1
+cd orchestrator
+npm test
 ```
 
-把 `AgentLine/` 复制到你的仓库，按模板创建 `.collab/tasks/001/brief.md` 即可开始。
-
-> 调度器（DSH 插件 + `agentline` CLI）暂未包含在这个仓库里；这里发布的是协议与 skill。
+测试覆盖配置分层、模型发现解析、候选切换交班与 `no_new_work`；不调用真实模型。
 
 ## 设计原则
 
@@ -103,9 +183,18 @@ pwsh -NoProfile -File AgentLine/tools/check-skill.ps1
 4. **人类保留最后一道闸门**：合并必须由人许可；
 5. **规则只因真实失败而增加**，并定期删减。
 
+## License
+
+[MIT](LICENSE)
+
 ## In English
 
 dsh-Agentline is a multi-model collaboration workflow for coding agents:
 design → develop → CI → review, with fixed hand-off files, executable acceptance
 checks, model isolation between developer and verifier, checkpointed hand-overs when
-a model fails, and a human merge gate. `AgentLine/` contains the protocol and skill.
+a model fails, and a human merge gate.
+
+This repository contains the protocol/skill (`AgentLine/`) and a runnable scheduler
+core (`orchestrator/`, Node.js 20+, zero dependencies) with automatic model discovery
+and no built-in model defaults.
+

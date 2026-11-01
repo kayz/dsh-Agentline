@@ -1,0 +1,62 @@
+{
+  "configVersion": 1,
+  "collabDir": ".collab/tasks",
+  "providers": {
+    "claude": {
+      "source": "anthropic",
+      "adapter": "claude-cli",
+      "transport": "cli",
+      "command": "claude",
+      "auth": { "check": ["auth", "status"] },
+      "effort": { "supported": ["low", "medium", "high", "xhigh", "max"], "cap": "xhigh", "banned": ["max"] },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "options": { "permissionMode": "acceptEdits", "allowedTools": ["Read", "Write", "Edit"] }
+    },
+    "codex": {
+      "source": "openai",
+      "adapter": "codex-cli",
+      "transport": "cli",
+      "command": "codex",
+      "auth": { "check": ["login", "status"] },
+      "effort": { "supported": ["low", "medium", "high", "xhigh", "max"], "cap": "max", "banned": ["ultra"] },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "options": { "sandbox": "workspace-write", "approvalPolicy": "never" }
+    },
+    "gemini": {
+      "source": "google",
+      "adapter": "gemini-cli",
+      "transport": "cli",
+      "command": "gemini",
+      "auth": { "env": ["GEMINI_API_KEY"] },
+      "effort": { "supported": [], "cap": "", "banned": [] },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "options": { "approvalMode": "auto_edit" }
+    },
+    "codebuddy": {
+      "source": "tencent",
+      "adapter": "codebuddy-cli",
+      "transport": "cli",
+      "command": "codebuddy",
+      "auth": { "check": [] },
+      "effort": { "supported": ["low", "medium", "high"], "cap": "high", "banned": [] },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "options": { "permissionMode": "acceptEdits" }
+    }
+  },
+  "models": {},
+  "roles": {
+    "design": { "candidates": [], "effort": "high" },
+    "dev": { "candidates": [], "effort": "high" },
+    "review": { "candidates": [], "effort": "high" }
+  },
+  "policy": {
+    "reviewModelMustDifferFromDev": true,
+    "maxSwitchesPerStage": 2,
+    "networkRetries": 2,
+    "handoff": true,
+    "healthReorder": false
+  },
+  "effort": { "default": "high" },
+  "ci": { "runner": "tools/ci-runner.ps1" },
+  "discovery": { "cacheFile": "agentline.models.json", "staleDays": 30 }
+}

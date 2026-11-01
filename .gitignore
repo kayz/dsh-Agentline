@@ -1,0 +1,8 @@
+# local machine state (never commit)
+orchestrator/config/agentline.local.json
+orchestrator/config/*.local.json
+orchestrator/config/agentline.models.json
+orchestrator/data/
+node_modules/
+.collab/
+*.log

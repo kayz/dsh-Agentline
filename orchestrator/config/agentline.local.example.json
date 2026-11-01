@@ -1,0 +1,16 @@
+{
+  "//": "复制为 agentline.local.json（不要提交）。用于本机路径、环境变量、模型与角色选择。",
+  "providers": {
+    "claude": { "command": "claude" },
+    "codex": { "command": "codex" },
+    "gemini": { "command": "gemini" },
+    "codebuddy": { "command": "codebuddy" }
+  },
+  "models": {},
+  "roles": {
+    "design": { "candidates": [] },
+    "dev": { "candidates": [] },
+    "review": { "candidates": [] }
+  },
+  "ci": { "runner": "tools/ci-runner.ps1" }
+}
