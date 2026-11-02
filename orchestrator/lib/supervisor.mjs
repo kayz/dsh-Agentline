@@ -9,6 +9,9 @@
  *      就被判成限流，把正常任务杀了。
  *   2) 第二版要求"错误词 + 规则词"同一行 —— 仍然误伤：Rust 代码里满是
  *      `map_err(|error| ...)`，加上文件行号 429，就凑成一条"错误行"。
+ *   3) 第三版（2026-11-02）：网络规则带 /i 的 `ENOTFOUND` 命中了 Python 的
+ *      `FileNotFoundError`（"fil**eNotFound**error"），把普通脚本报错当成
+ *      DNS 故障杀掉。系统错误码必须大小写敏感 + 词边界，短语才可忽略大小写。
  *
  * 现在的判据：
  *   - stderr：全量匹配（真正的错误几乎都在这里）；
@@ -22,7 +25,12 @@ export const RULES = [
   { id: 'rate_limit', re: /rate.?limit(ed)?|too many requests|quota exceeded|请求过于频繁|限流|(status|http)\s*429/i },
   { id: 'auth', re: /\b(401|403)\b|unauthorized|invalid api key|not logged in|please log ?in|authentication failed|未登录|认证失败/i },
   { id: 'context', re: /context (length|window) (exceeded|too long)|maximum context|too many tokens|上下文.{0,8}(超出|过长)/i },
-  { id: 'network', re: /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|connection reset|network (error|unreachable)|连接被重置/i },
+  // 网络证据分两类，必须分开匹配（2026-11-02 第三次误判的教训）：
+  //   1) 操作系统/Node 的错误码是大写 token，必须加词边界。
+  //      此前用 /i 匹配 ENOTFOUND，会命中 Python 的 `FileNotFoundError`
+  //      （"fil**eNotFound**error"），把普通脚本报错误判成网络中断并杀进程。
+  //   2) 人类可读短语保持大小写不敏感（"Connection reset by peer" 等）。
+  { id: 'network', re: /(?<![A-Za-z])(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)(?![A-Za-z])|socket hang up|connection reset|network (?:error|unreachable)|连接被重置/i },
 ]
 
 /** 一条 stdout 行是否"自己声明是错误" */
