@@ -124,6 +124,8 @@ developer 只能修改这些路径；`check-task.ps1` 会用 git diff 校验，�
 
 调度器模式另有换候选交班：新的候选先读 handoff 单，明确选择保留现场继续或回滚重做，并用新产出证明不是「继承即完成」。
 
+调度器默认每个任务在独立 git worktree 中执行，主工作区停在 main；进入 dev 前按 `write_scope` 申请执行槽，范围相交的任务排队而不是并发写同一片区域。
+
 ## 规则
 
 1. 每个角色只写自己负责的交接文件（见上表）；产品代码写入范围以 design.md 的 write_scope 为准，state.json 由当前阶段角色或调度器维护。

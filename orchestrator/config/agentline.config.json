@@ -1,6 +1,8 @@
 {
   "configVersion": 1,
   "collabDir": ".collab/tasks",
+  "worktree": { "enabled": true, "dir": ".collab/worktrees", "baseRef": "main" },
+  "concurrency": { "maxTasks": 3, "pollSeconds": 5, "wait": true },
   "providers": {
     "claude": {
       "source": "anthropic",

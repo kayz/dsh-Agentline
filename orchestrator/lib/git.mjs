@@ -20,6 +20,13 @@ export async function currentBranch(cwd) {
   return r.out
 }
 
+/** 主仓库的 .git 目录（worktree 里执行时也指向主仓库） */
+export async function commonGitDir(cwd) {
+  const r = await git(['rev-parse', '--git-common-dir'], cwd)
+  if (r.code !== 0) throw new Error(`git rev-parse --git-common-dir failed: ${r.err || r.out}`)
+  return path.isAbsolute(r.out) ? r.out : path.resolve(cwd, r.out)
+}
+
 export async function hasChangesBesides(cwd, ignored = []) {
   const r = await git(['status', '--porcelain'], cwd)
   const lines = r.out.split('\n').map((s) => s.trim()).filter(Boolean)

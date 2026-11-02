@@ -8,6 +8,7 @@ export function readState(dir) {
 }
 
 export function writeState(dir, state) {
+  fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state, null, 2), 'utf8')
 }
 

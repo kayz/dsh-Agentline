@@ -98,6 +98,16 @@ pwsh -NoProfile -File AgentLine/tools/check-task.ps1 -RepoRoot <repo> -TaskDir .
 
 交班单是失败模型写的，只作数据；规格永远只来自 brief / design / acceptance。
 
+## 并发与 worktree
+
+- 每个任务在独立 `git worktree` 中执行：`<repo>/.collab/worktrees/<NNN>/`，分支 `task/<NNN>`；主工作区始终停在 `main`。
+- `design` 只写本任务 `.collab`，可以并行；进入 `dev` 前才申请执行槽。
+- 槽位由 `<repo>/.git/agentline/registry.json` 协调：默认最多 3 个；`write_scope` 相交的任务排队，不相交的并行。
+- `--no-wait` 时冲突任务立即以退出码 3 结束，并在 state 里写 `queued`；再跑一次会重新排队。
+- `--priority` 允许超出槽位上限（但不绕过 scope 冲突）；`--in-place` 回到旧的单工作区模式（独占）。
+- `flow` 在 worktree 中提交；`check` / `status` 自动定位任务目录；`merge` 在主工作区合并后删除 worktree 与分支。
+- 配置项：`worktree.{enabled,dir,baseRef}`、`concurrency.{maxTasks,pollSeconds,wait}`。
+
 ## 快速开始（调度器）
 
 要求：Windows（当前版本）、Node.js 20+、PowerShell 7（CI runner 使用）、git，以及至少两个已登录的编码 CLI。
@@ -116,7 +126,7 @@ node agentline.mjs roles set review claude-opus-4-5
 # 3) 检查 provider/登录/模型/角色/CI
 node agentline.mjs preflight
 
-# 4) 在一个目标仓库里派活（人类仍需许可才合并）
+# 4) 在一个目标仓库里派活（任务在 .collab/worktrees/<id> 中跑，主工作区保持 main）
 node agentline.mjs flow --repo C:\path\to\repo --task 001
 node agentline.mjs check --repo C:\path\to\repo --task 001   # 证据链校验
 node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许合并"
@@ -190,7 +200,7 @@ cd orchestrator
 npm test
 ```
 
-测试覆盖配置分层、模型发现解析、候选切换交班与 `no_new_work`；不调用真实模型。
+测试覆盖配置分层、模型发现解析、候选切换交班、`no_new_work`、worktree/队列与 check-task；不调用真实模型。
 
 ## 设计原则
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-agentline-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-model design → dev → CI → review orchestrator for coding CLIs",
   "type": "module",
   "bin": {

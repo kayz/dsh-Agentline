@@ -30,6 +30,9 @@ import { acquireLock, installCleanup } from './lib/lock.mjs'
 import { sweepInterrupted, readLock, isPidAlive, REASON } from './lib/recovery.mjs'
 import { requestStop, isStopRequested, clearControl } from './lib/control.mjs'
 import { buildSummary } from './lib/summary.mjs'
+import { runFlow } from './lib/flow.mjs'
+import { resolveTaskDir } from './lib/worktree.mjs'
+import { runningTasks, releaseCapacity, releaseTaskLock, taskLockHolder } from './lib/registry.mjs'
 import { writeNotice, printReport } from './lib/report.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -82,14 +85,17 @@ function runnerPath() {
   return path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw)
 }
 
-function setStatus(status, by, extra = {}) {
-  const st = readState(dir) || { id: taskId, history: [] }
+function setStatusAt(taskDir, status, by, extra = {}) {
+  const st = readState(taskDir) || { id: taskId, history: [] }
   const next = {
     ...st, ...extra, status, updated_at: new Date().toISOString(),
     history: [...(st.history || []), { at: new Date().toISOString(), from: st.status, to: status, by }],
   }
-  writeState(dir, next)
+  writeState(taskDir, next)
   return next
+}
+function setStatus(status, by, extra = {}) {
+  return setStatusAt(dir, status, by, extra)
 }
 
 // ───────────────────────────── init / models / roles ─────────────────────────────
@@ -225,13 +231,18 @@ async function cmdPreflight() {
 
 // ───────────────────────────── status / run / flow ─────────────────────────────
 function cmdStatus() {
-  const st = readState(dir)
-  if (st) { log(JSON.stringify(st, null, 2)); return }
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  const taskDir = located?.dir || dir
+  const st = readState(taskDir)
+  if (st) {
+    log(JSON.stringify({ ...st, _worktree: located?.worktree ? located.repo : null }, null, 2))
+    return
+  }
 
   // 历史任务（没有 state.json）：只读推导，不写盘
-  if (!fs.existsSync(dir)) fail(`no task dir: ${dir}`)
-  const files = fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile())
-  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) } catch { return null } }
+  if (!fs.existsSync(taskDir)) fail(`no task dir: ${taskDir}`)
+  const files = fs.readdirSync(taskDir).filter((f) => fs.statSync(path.join(taskDir, f)).isFile())
+  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(path.join(taskDir, f), 'utf8')) } catch { return null } }
   const verdicts = files.filter((f) => /^verdict.*\.json$/.test(f)).sort().map((f) => ({ file: f, ...readJson(f) }))
   const last = verdicts[verdicts.length - 1] || null
   log(JSON.stringify({
@@ -261,229 +272,16 @@ async function cmdRun() {
 }
 
 async function cmdFlow() {
-  const maxRounds = Number(args['max-rounds'] ?? 2)
-  const runner = runnerPath()
-  const summary = []
-
-  if (args['dry-run']) { log(`dry-run: would run design→dev→CI→review for task ${taskId} in ${repo}`); return }
-  if (!runner) fail('ci.runner is not configured (set it in config/agentline.local.json)')
-  if (!fs.existsSync(runner)) fail(`ci.runner not found: ${runner}`)
-  if (loaded.errors.length) fail(loaded.errors.join('\n'))
-  const missingRoles = ROLES.filter((role) => !effectiveRole(config, role, projectCfg).order.length)
-  if (missingRoles.length) fail(`roles not configured: ${missingRoles.join(', ')} (run "agentline init" then "agentline roles set ...")`)
-
-  let st = readState(dir)
-  if (st && ['reviewed', 'pr_open', 'merged'].includes(st.status)) {
-    log(`task ${taskId} is ${st.status}; nothing to do`)
-    return
-  }
-
-  const lockFile = path.join(repo, '.collab', '.flow.lock')
-  const lock = acquireLock(lockFile, { task: taskId, cmd: 'flow' })
-  if (!lock.ok) {
-    log(`another flow is running: pid=${lock.holder.pid} task=${lock.holder.task || '?'} since ${lock.holder.at}`)
-    log('if that process is gone, rerun — stale locks are reclaimed automatically')
-    process.exit(2)
-  }
-  installCleanup(lockFile)
-  if (lock.stale) log(`reclaimed stale lock from pid=${lock.stale.pid} task=${lock.stale.task || '?'}`)
-
-  const branch = await ensureTaskBranch(repo, taskId)
-  log(`branch: ${branch.branch}${branch.created ? ' (created)' : ''}`)
-
-  st = st || setStatus('draft', 'init')
-
-  const doCI = async (label) => {
-    log(`\n[CI] ${label}`)
-    const ci = await runCI({ repo, taskDirRel, runnerPath: runner, outPath: path.join(dir, 'ci-results.json') })
-    appendRun(dir, {
-      task: taskId, role: 'ci', round: 0, backend: 'local', provider: 'local',
-      model_requested: '-', model_resolved: '-', effort: '-',
-      started_at: new Date().toISOString(), ended_at: new Date().toISOString(),
-      duration_ms: 0, exit: { code: ci.exitCode }, commands: [], artifacts: [], git: null,
-      ci: ciRecord(ci, taskDirRel, repo, runner), usage: null, usage_source: 'none',
-      log_ref: `${taskDirRel.replaceAll('\\', '/')}/ci-results.json`, error: ci.ok ? null : 'ci_failed',
-    })
-    log(ci.ok ? `CI PASS ${ci.summary?.passed}/${ci.summary?.total}` : `CI FAIL ${ci.summary?.passed ?? '?'}/${ci.summary?.total ?? '?'}`)
-    return ci
-  }
-
-  const swept = sweepInterrupted(repo, { log })
-  if (swept.length) log('recovery: ' + swept.map((x) => x.task + '(' + x.from + ')').join(', ') + ' 标记为中断')
-  st = readState(dir) || st
-
-  if (st.status === 'blocked') {
-    if (!args.resume) {
-      const why = st.blocked_reason === REASON ? '上次运行被终止（可一键继续）' : (st.blocked_reason || 'unknown')
-      log('task is blocked (' + why + '); rerun with --resume to continue')
-      process.exit(2)
-    }
-    const hist = st.history || []
-    const last = [...hist].reverse().find((h) => h.to && h.to !== 'blocked')
-    const back = last ? last.to : 'draft'
-    log('resume: ' + st.status + ' -> ' + back)
-    if (st.blocked_reason === REASON && !args.keep) {
-      const discarded = await discardWorkingChanges(repo, log)
-      if (discarded) log('recovery: 已丢弃中断时留下的未提交改动（--keep 可保留）')
-    }
-    st = setStatus(back, 'resume', { blocked_reason: null, interrupted: null })
-  }
-
-  const STOPPED = 'halted_by_user'
-  const stopIfRequested = (where) => {
-    if (!isStopRequested(dir)) return false
-    log('stop requested -> 在 ' + where + ' 之后停止')
-    clearControl(dir)
-    setStatus('blocked', 'user', { blocked_reason: STOPPED })
-    return true
-  }
-
-  if (st.status === 'draft') {
-    const eff = effectiveRole(config, 'design', projectCfg)
-    log('routing: design -> ' + eff.order.join(' > '))
-    const r = await executeRole({ config, repo, taskId, role: 'design', round: 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
-    if (!r.ok) return finish({ ok: false, reason: r.state.blocked_reason })
-    await commitAll(repo, `stage(design): task ${taskId}`)
-    summary.push({ stage: 'design', model: r.model, ok: true })
-    if (stopIfRequested('design')) return finish({ ok: false, reason: STOPPED })
-    st = readState(dir)
-  }
-
-  if (st.status === 'designed') {
-    const eff = effectiveRole(config, 'dev', projectCfg)
-    log('routing: dev -> ' + eff.order.join(' > '))
-    const r = await executeRole({ config, repo, taskId, role: 'dev', round: 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
-    if (!r.ok) return finish({ ok: false, reason: r.state.blocked_reason })
-    await commitAll(repo, `stage(dev): task ${taskId}`)
-    summary.push({ stage: 'dev', model: r.model, ok: true })
-    if (stopIfRequested('dev')) return finish({ ok: false, reason: STOPPED })
-    st = readState(dir)
-  }
-
-  let ci = await doCI('after dev')
-  if (!ci.ok) {
-    log('[CI] failing → one repair attempt')
-    const eff = effectiveRole(config, 'dev', projectCfg)
-    const r = await executeRole({ config, repo, taskId, role: 'dev', round: 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
-    if (!r.ok) return finish({ ok: false, reason: r.state.blocked_reason })
-    await commitAll(repo, `fix(dev): repair after CI failure (task ${taskId})`)
-    ci = await doCI('after repair')
-    if (!ci.ok) return finish({ ok: false, reason: 'ci_failed' })
-  }
-  setStatus('reviewable', 'ci')
-  if (stopIfRequested('CI')) return finish({ ok: false, reason: STOPPED })
-
-  let verdict = null
-  for (let round = 1; round <= maxRounds; round++) {
-    const devModelId = readState(dir)?.model
-    const revEff = effectiveRole(config, 'review', projectCfg)
-    const allowed = revEff.order.filter((k) => config.models[k] && config.models[k].id !== devModelId)
-    const reviewModel = allowed[0]
-    if (!reviewModel) return finish({ ok: false, reason: 'no_candidate' })
-    log(`[review r${round}] dev used ${devModelId} → review model ${reviewModel}`)
-
-    const rv = await executeRole({ config, repo, taskId, role: 'review', round, modelOverride: reviewModel, effortOverride: revEff.effort, log })
-    if (!rv.ok) return finish({ ok: false, reason: rv.state.blocked_reason })
-    verdict = readVerdict(dir, round)
-    summary.push({ stage: `review-r${round}`, model: rv.model, ok: verdict?.verdict === 'pass', verdict: verdict?.verdict })
-
-    if (verdict?.verdict === 'pass') {
-      await commitAll(repo, `stage(review-r${round}): pass (task ${taskId})`)
-      setStatus('reviewed', 'review')
-      break
-    }
-
-    log(`[review r${round}] needs_revision → repair`)
-    await commitAll(repo, `stage(review-r${round}): needs_revision (task ${taskId})`)
-    const eff = effectiveRole(config, 'dev', projectCfg)
-    const fx = await executeRole({ config, repo, taskId, role: 'dev', round: round + 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
-    if (!fx.ok) return finish({ ok: false, reason: fx.state.blocked_reason })
-    await commitAll(repo, `fix(dev-r${round + 1}): address review findings (task ${taskId})`)
-    ci = await doCI(`after repair r${round}`)
-    if (!ci.ok) return finish({ ok: false, reason: 'ci_failed' })
-    setStatus('reviewable', 'ci')
-    if (stopIfRequested('review-repair CI')) return finish({ ok: false, reason: STOPPED })
-  }
-
-  if (verdict?.verdict !== 'pass') return finish({ ok: false, reason: 'review_exhausted' })
-
-  const files = await changedFiles(repo, 'main')
-  setStatus('pr_open', 'agentline', {
-    pr: { branch: branch.branch, state: 'open', files, sha: await headSha(repo) },
-    merge_gate: { requires_human_permission: true, on_no_permission: 'stay_in_pr' },
-  })
-  await commitAll(repo, `chore(${taskId}): pr_open state`)
-  return finish({ ok: true, branch: branch.branch, files })
-
-  async function finish(result) {
-    log('\n=== FLOW SUMMARY ===')
-    for (const s of summary) log((s.ok ? 'OK  ' : 'FAIL') + '  ' + String(s.stage).padEnd(12) + ' model=' + (s.model ?? '-') + (s.verdict ? ' verdict=' + s.verdict : ''))
-    log(result.ok ? 'result: PR READY (pr_open)' : 'result: BLOCKED - ' + result.reason)
-
-    if (!result.ok) {
-      try {
-        const cur = readState(dir)
-        if (cur && cur.status !== 'merged' && cur.status !== 'blocked') {
-          setStatus('blocked', 'flow', { blocked_reason: result.reason || 'unknown' })
-        }
-      } catch (e) { log('persist blocked failed: ' + (e && e.message ? e.message : String(e))) }
-    }
-
-    try {
-      const st2 = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')) } catch { return null } })()
-      const ci2 = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'ci-results.json'), 'utf8')) } catch { return null } })()
-      let v2 = null
-      let bestRound = -1
-      for (const name of (fs.existsSync(dir) ? fs.readdirSync(dir) : [])) {
-        const m = name.match(/^verdict(?:-r(\d+))?\.json$/)
-        if (!m) continue
-        const round = m[1] ? Number(m[1]) : 1
-        if (round > bestRound) { bestRound = round; v2 = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) }
-      }
-      const event = result.ok ? 'pr_open' : (String(result.reason || '') === STOPPED ? 'halted' : 'blocked')
-      const text = await buildSummary({ repo, taskId, dir, event, reason: result.reason || null, branch: result.branch || (branch && branch.branch) || null })
-      writeNotice(dir, {
-        task: taskId, event, reason: result.reason || null,
-        verdict: v2 ? v2.verdict : null, ci: ci2 ? `${ci2.passed}/${ci2.total}` : null,
-        files: result.files ? result.files.length : null,
-        branch: result.branch || (branch && branch.branch) || null,
-        status: st2 ? st2.status : null, summary: text,
-      })
-    } catch (e) { log('summary/notice failed: ' + (e && e.message ? e.message : String(e))) }
-
-    try {
-      await printReport({ repo, taskId, dir, runs: null, summary, result, branch: result.branch || (branch && branch.branch) })
-    } catch (e) { log('report failed: ' + (e && e.message ? e.message : String(e))) }
-    process.exit(result.ok ? 0 : 1)
-  }
-}
-
-async function discardWorkingChanges(repo, log) {
-  const { spawn } = await import('node:child_process')
-  const run = (a) => new Promise((res) => {
-    const c = spawn('git', a, { cwd: repo, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    let o = ''; let e = ''
-    c.stdout.on('data', (d) => { o += d })
-    c.stderr.on('data', (d) => { e += d })
-    c.on('close', (code) => res({ code, out: o, err: e }))
-  })
-  const st = await run(['status', '--porcelain'])
-  const entries = st.out.split('\n').filter(Boolean)
-    .map((line) => ({ code: line.slice(0, 2).trim(), file: line.slice(3).trim() }))
-    .filter((x) => x.file && !x.file.startsWith('.collab/') && x.file !== '.gitignore')
-  if (!entries.length) return false
-  const tracked = entries.filter((x) => x.code !== '??').map((x) => x.file)
-  const untracked = entries.filter((x) => x.code === '??').map((x) => x.file)
-  if (tracked.length) await run(['checkout', '--', ...tracked])
-  for (const f of untracked) { try { fs.rmSync(path.join(repo, f), { force: true }) } catch { /* ignore */ } }
-  log?.(`discarded: ${tracked.length} modified, ${untracked.length} untracked`)
-  return true
+  const code = await runFlow({ config, repo, taskId, args, runnerPath: runnerPath(), log })
+  process.exit(code)
 }
 
 async function cmdMerge() {
   const permission = args.permission
-  const st = readState(dir)
-  if (!st) fail(`no state.json in ${dir}`)
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  const taskDir = located?.dir || dir
+  const st = readState(taskDir)
+  if (!st) fail(`no state.json in ${taskDir}`)
   if (!permission || typeof permission !== 'string') fail('refuse: merge 需要人类许可：agentline merge --task <id> --permission "允许合并"')
   if (st.status !== 'pr_open') fail(`refuse: task status is ${st.status}, expected pr_open`)
 
@@ -507,8 +305,16 @@ async function cmdMerge() {
   const anc = await run(['merge-base', '--is-ancestor', branchName, 'main'])
   if (anc.code !== 0) fail(`merge verification failed: ${branchName} is not contained in main`)
 
+  if (located?.worktree && !args['keep-worktree']) {
+    const { removeTaskWorktree } = await import('./lib/worktree.mjs')
+    await removeTaskWorktree(repo, taskId, { dirRel: config.worktree?.dir })
+    log(`worktree removed: ${located.repo}`)
+  }
+
   const sha = await headSha(repo)
-  const next = setStatus('merged', 'human', {
+  const mainDir = path.join(repo, config.collabDir, taskId)
+  if (!fs.existsSync(mainDir)) fail(`merged task dir missing in main: ${mainDir}`)
+  const next = setStatusAt(mainDir, 'merged', 'human', {
     pr: { ...(st.pr || {}), state: 'merged', sha, merged_at: new Date().toISOString(), permission },
   })
   await commitAll(repo, `chore(${taskId}): mark merged after human permission`)
@@ -522,9 +328,9 @@ async function cmdMerge() {
   }
 
   try {
-    const ci = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'ci-results.json'), 'utf8')) } catch { return null } })()
-    const text = await buildSummary({ repo, taskId, dir, event: 'merged', branch: deleted ? `${branchName}（已删除）` : branchName })
-    writeNotice(dir, { task: taskId, event: 'merged', status: next.status, ci: ci ? `${ci.passed}/${ci.total}` : null, branch: branchName, summary: text })
+    const ci = (() => { try { return JSON.parse(fs.readFileSync(path.join(mainDir, 'ci-results.json'), 'utf8')) } catch { return null } })()
+    const text = await buildSummary({ repo, taskId, dir: mainDir, event: 'merged', branch: deleted ? `${branchName}（已删除）` : branchName })
+    writeNotice(mainDir, { task: taskId, event: 'merged', status: next.status, ci: ci ? `${ci.passed}/${ci.total}` : null, branch: branchName, summary: text })
   } catch { /* ignore */ }
   log(`state: ${next.status}`)
 }
@@ -532,34 +338,49 @@ async function cmdMerge() {
 async function cmdCheck() {
   const script = path.resolve(__dirname, '..', 'AgentLine', 'tools', 'check-task.ps1')
   if (!fs.existsSync(script)) fail(`check-task.ps1 not found: ${script}`)
-  const argv = ['-NoProfile', '-File', script, '-RepoRoot', repo, '-TaskDir', taskDirRel]
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  if (!located) fail(`task dir not found for ${taskId}`)
+  const rel = path.relative(located.repo, located.dir)
+  const argv = ['-NoProfile', '-File', script, '-RepoRoot', located.repo, '-TaskDir', rel]
   if (args.strict) argv.push('-Strict')
   if (args.lenient) argv.push('-Lenient')
   const { spawn } = await import('node:child_process')
-  const child = spawn('pwsh', argv, { cwd: repo, stdio: 'inherit', windowsHide: false })
+  const child = spawn('pwsh', argv, { cwd: located.repo, stdio: 'inherit', windowsHide: false })
   child.on('close', (code) => process.exit(code ?? 1))
 }
 
 async function cmdStop() {
-  const lock = readLock(repo)
-  if (!lock || !isPidAlive(lock.pid)) {
-    log('没有正在运行的 flow（lock 不存在或持有者已退出）')
+  const tasks = await runningTasks(repo)
+  const entry = tasks.find((t) => t.task === taskId)
+  const holder = await taskLockHolder(repo, taskId)
+  let pid = entry?.pid || holder?.pid || null
+  let taskDir = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })?.dir || dir
+
+  if (!pid) {
+    const lock = readLock(repo)
+    if (lock && lock.task === taskId) pid = lock.pid
+  }
+  if (!pid || !isPidAlive(pid)) {
+    log('没有正在运行的 flow（registry/lock 不存在或持有者已退出）')
     process.exit(1)
   }
+
   if (args.now) {
-    log(`立即终止 flow pid=${lock.pid}`)
+    log(`立即终止 flow pid=${pid}`)
     const { spawn } = await import('node:child_process')
     await new Promise((res) => {
-      const c = spawn('taskkill', ['/PID', String(lock.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      const c = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
       c.on('close', () => res())
     })
-    const st = readState(dir)
-    if (st && st.status !== 'merged') setStatus('blocked', 'user', { blocked_reason: 'halted_by_user' })
-    clearControl(dir)
+    const st = readState(taskDir)
+    if (st && st.status !== 'merged') setStatusAt(taskDir, 'blocked', 'user', { blocked_reason: 'halted_by_user' })
+    clearControl(taskDir)
+    await releaseCapacity(repo, taskId)
+    await releaseTaskLock(repo, taskId)
     log('已终止；下次 flow --resume 可继续')
     return
   }
-  requestStop(dir, 'after_stage')
+  requestStop(taskDir, 'after_stage')
   log('已请求停止：当前阶段结束后退出（flow 会自己收尾）')
 }
 
@@ -572,7 +393,7 @@ function help() {
   node agentline.mjs roles show|set
   node agentline.mjs preflight
   node agentline.mjs run   --task <id> --role <design|dev|review>
-  node agentline.mjs flow  --task <id> [--max-rounds 2] [--resume]
+  node agentline.mjs flow  --task <id> [--max-rounds 2] [--resume] [--in-place] [--no-wait] [--priority] [--base <ref>]
   node agentline.mjs merge --task <id> --permission "允许合并"
   node agentline.mjs stop  --task <id> [--now]
   node agentline.mjs check --task <id> [--strict|--lenient]
@@ -600,6 +421,7 @@ switch (cmd) {
   case 'help': case '--help': case undefined: help(); break
   default: help(); process.exit(2)
 }
+
 
 
 
