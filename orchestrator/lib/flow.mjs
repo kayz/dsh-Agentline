@@ -20,6 +20,7 @@ import { ensureTaskBranch, commitAll, changedFiles, headSha } from './git.mjs'
 import { buildSummary } from './summary.mjs'
 import { writeNotice, printReport } from './report.mjs'
 import { effectiveRole } from './routing.mjs'
+import { pendingInputs, readAttention, removeAttention } from './inputs.mjs'
 
 const STOPPED = 'halted_by_user'
 
@@ -127,6 +128,22 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     log('stop requested -> 在 ' + where + ' 之后停止')
     clearControl(runDir)
     setStatus('blocked', 'user', { blocked_reason: STOPPED })
+    return true
+  }
+
+  const midAmendment = (where) => {
+    const am = pendingInputs(runDir, ['amendment'])
+    if (!am.length) return false
+    log(`[input] ${am.length} 条 amendment（${where}）→ 当前轮作废，回到 design`)
+    setStatus('blocked', 'input', { blocked_reason: 'amendment_pending' })
+    return true
+  }
+  const attentionBlock = (where) => {
+    const att = readAttention(runDir)
+    if (!att) return false
+    log(`[attention] ${where}: ${att.question || '(no question)'}`)
+    if (Array.isArray(att.options) && att.options.length) log('options: ' + att.options.join(' | '))
+    setStatus('blocked', 'input', { blocked_reason: 'awaiting_human' })
     return true
   }
 
@@ -254,6 +271,25 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     st = setStatus(back, 'resume', { blocked_reason: null, interrupted: null })
   }
 
+
+  const att0 = readAttention(runDir)
+  if (att0) {
+    const answers = pendingInputs(runDir, ['answer'])
+    if (answers.length) {
+      removeAttention(runDir)
+      log('attention answer received -> design')
+      if (st.status !== 'draft') st = setStatus('draft', 'input', { blocked_reason: null })
+    } else {
+      log(`等待人类回答：${att0.question || '(no question)'}`)
+      if (Array.isArray(att0.options) && att0.options.length) log('options: ' + att0.options.join(' | '))
+      return finish({ ok: false, reason: 'awaiting_human' })
+    }
+  }
+  if (pendingInputs(runDir, ['amendment']).length && st.status !== 'draft') {
+    log('amendment pending -> back to design')
+    st = setStatus('draft', 'input', { blocked_reason: null })
+  }
+
   if (st.status === 'draft') {
     const eff = effectiveRole(config, 'design', projectCfg)
     log('routing: design -> ' + eff.order.join(' > '))
@@ -262,6 +298,8 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     await commitAll(runRepo, `stage(design): task ${taskId}`)
     summary.push({ stage: 'design', model: r.model, ok: true })
     if (stopIfRequested('design')) return finish({ ok: false, reason: STOPPED })
+    if (attentionBlock('design')) return finish({ ok: false, reason: 'awaiting_human' })
+    if (midAmendment('design')) return finish({ ok: false, reason: 'amendment_pending' })
     st = readState(runDir)
   }
 
@@ -269,6 +307,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
   if (['designed', 'blocked'].includes(st.status)) {
     const slot = await ensureSlot('dev')
     if (!slot.ok) { await releaseAll(); return 3 }
+    if (midAmendment('before dev')) return finish({ ok: false, reason: 'amendment_pending' })
   }
 
   if (st.status === 'designed') {
@@ -279,6 +318,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     await commitAll(runRepo, `stage(dev): task ${taskId}`)
     summary.push({ stage: 'dev', model: r.model, ok: true })
     if (stopIfRequested('dev')) return finish({ ok: false, reason: STOPPED })
+    if (midAmendment('dev')) return finish({ ok: false, reason: 'amendment_pending' })
     st = readState(runDir)
   }
 
@@ -300,6 +340,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
   }
   setStatus('reviewable', 'ci')
   if (stopIfRequested('CI')) return finish({ ok: false, reason: STOPPED })
+  if (midAmendment('CI')) return finish({ ok: false, reason: 'amendment_pending' })
 
   let verdict = null
   for (let round = 1; round <= maxRounds; round++) {
@@ -318,6 +359,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     if (verdict?.verdict === 'pass') {
       await commitAll(runRepo, `stage(review-r${round}): pass (task ${taskId})`)
       setStatus('reviewed', 'review')
+      if (midAmendment('review')) return finish({ ok: false, reason: 'amendment_pending' })
       break
     }
 
@@ -331,9 +373,11 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     if (!ci.ok) return finish({ ok: false, reason: 'ci_failed' })
     setStatus('reviewable', 'ci')
     if (stopIfRequested('review-repair CI')) return finish({ ok: false, reason: STOPPED })
+    if (midAmendment('review-repair')) return finish({ ok: false, reason: 'amendment_pending' })
   }
 
   if (verdict?.verdict !== 'pass') return finish({ ok: false, reason: 'review_exhausted' })
+  if (midAmendment('pr_open')) return finish({ ok: false, reason: 'amendment_pending' })
 
   const files = await changedFiles(runRepo, 'main')
   setStatus('pr_open', 'agentline', {

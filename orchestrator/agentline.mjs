@@ -32,6 +32,7 @@ import { requestStop, isStopRequested, clearControl } from './lib/control.mjs'
 import { buildSummary } from './lib/summary.mjs'
 import { runFlow } from './lib/flow.mjs'
 import { resolveTaskDir } from './lib/worktree.mjs'
+import { appendInput, readInputs, pendingInputs, readAttention } from './lib/inputs.mjs'
 import { runningTasks, releaseCapacity, releaseTaskLock, taskLockHolder } from './lib/registry.mjs'
 import { writeNotice, printReport } from './lib/report.mjs'
 
@@ -177,6 +178,48 @@ function cmdRoles() {
     return
   }
   fail(`unknown roles subcommand: ${sub}`)
+}
+
+// ───────────────────────────── inputs ─────────────────────────────
+function cmdInput() {
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  if (!located) fail(`task dir not found for ${taskId}`)
+  const st = readState(located.dir)
+  if (st && ['pr_open', 'merged'].includes(st.status)) fail(`task is ${st.status}; inputs are only accepted before pr_open`)
+  let kind = args.kind
+  let text = args.text
+  if (!kind) kind = args._[1]
+  if (!text) {
+    const from = kind && !args.kind ? 2 : 1
+    text = args._.slice(from).join(' ')
+  }
+  if (!kind || !text) fail('usage: agentline input --task <id> --kind note|amendment --text "..."')
+  const entry = appendInput(located.dir, { kind, text })
+  log(`input ${entry.id} [${kind}] -> ${located.dir}`)
+  if (kind === 'amendment') log('amendment 已记录；下一次 flow 会退回 design（若正在跑，阶段末会 blocked）')
+}
+
+function cmdAnswer() {
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  if (!located) fail(`task dir not found for ${taskId}`)
+  const text = args.text || args._.slice(1).join(' ')
+  if (!text) fail('usage: agentline answer --task <id> --text "..."')
+  const att = readAttention(located.dir)
+  const entry = appendInput(located.dir, { kind: 'answer', text, meta: att ? { attention: att.question || null } : null })
+  log(`answer ${entry.id} -> ${located.dir}`)
+  log('下一步：flow --resume（design 会读取回答后继续）')
+}
+
+function cmdInputs() {
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  if (!located) fail(`task dir not found for ${taskId}`)
+  const all = readInputs(located.dir)
+  const att = readAttention(located.dir)
+  if (att) log(`[attention pending] ${att.question || '(no question)'}${Array.isArray(att.options) && att.options.length ? ' options=' + att.options.join('|') : ''}`)
+  if (!all.length) { log('(no inputs)'); return }
+  for (const i of all) log(`${i.status.padEnd(9)} ${i.kind.padEnd(9)} ${i.id}  ${i.text.slice(0, 100)}`)
+  const pending = pendingInputs(located.dir)
+  if (pending.length) log(`\n${pending.length} pending; note 会在下一阶段注入，amendment 会退回 design，answer 用 --resume 继续`)
 }
 
 // ───────────────────────────── preflight ─────────────────────────────
@@ -397,6 +440,9 @@ function help() {
   node agentline.mjs merge --task <id> --permission "允许合并"
   node agentline.mjs stop  --task <id> [--now]
   node agentline.mjs check --task <id> [--strict|--lenient]
+  node agentline.mjs input --task <id> --kind note|amendment --text "..."
+  node agentline.mjs answer --task <id> --text "..."
+  node agentline.mjs inputs --task <id>
   node agentline.mjs status --task <id>
 
 公共参数：
@@ -418,6 +464,9 @@ switch (cmd) {
   case 'merge': await cmdMerge(); break
   case 'stop': await cmdStop(); break
   case 'check': await cmdCheck(); break
+  case 'input': cmdInput(); break
+  case 'answer': cmdAnswer(); break
+  case 'inputs': cmdInputs(); break
   case 'help': case '--help': case undefined: help(); break
   default: help(); process.exit(2)
 }

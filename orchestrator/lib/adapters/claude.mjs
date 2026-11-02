@@ -2,6 +2,26 @@ import fs from 'node:fs'
 import { runCapture, runProcess, resolveCommand } from '../process.mjs'
 import { lastJson, parseEventLines, envFor, effortArgs } from './shared.mjs'
 
+/** 解析 Claude stream-json 行：tool_use/tool_result 用于区分「工具在跑」与「API 静默」 */
+export function classifyClaudeLine(line) {
+  const t = String(line || '').trim()
+  if (!t.startsWith('{')) return null
+  let e
+  try { e = JSON.parse(t) } catch { return null }
+  if (e.type === 'assistant' && Array.isArray(e.message?.content)) {
+    const tool = e.message.content.find((b) => b && b.type === 'tool_use')
+    if (tool) return { kind: 'tool_start', id: tool.id }
+    return { kind: 'activity' }
+  }
+  if (e.type === 'user' && Array.isArray(e.message?.content)) {
+    const res = e.message.content.find((b) => b && b.type === 'tool_result')
+    if (res) return { kind: 'tool_end', id: res.tool_use_id }
+    return { kind: 'activity' }
+  }
+  if (e.type === 'result') return e.is_error ? { kind: 'error', reason: e.result || 'result error' } : { kind: 'activity' }
+  if (e.type === 'error') return { kind: 'error', reason: e.message || 'error' }
+  return { kind: 'activity' }
+}
 const MODEL_ID_RE = /claude-(?:opus|sonnet|haiku)-[0-9][0-9A-Za-z.-]*/g
 
 /** 从 Claude 可执行文件/JS 包中抽取模型 id；导出供测试 */
@@ -101,6 +121,9 @@ export const claude = (cfg) => ({
       command: cfg.command, args, cwd, env, timeoutMs, logPath,
       header: '=== PROMPT ===\n' + prompt + '\n=== STREAM ===',
       stallMinutes: cfg.limits?.stallMinutes,
+      classify: classifyClaudeLine,
+      apiStallSeconds: cfg.limits?.apiStallSeconds ?? 120,
+      toolStallMinutes: cfg.limits?.toolStallMinutes ?? 60,
     })
     const events = parseEventLines(res.stdout)
     const final = events.filter((e) => e && e.type === 'result').pop() || null
@@ -123,3 +146,4 @@ export const claude = (cfg) => ({
     }
   },
 })
+

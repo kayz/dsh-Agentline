@@ -11,7 +11,7 @@
       "command": "claude",
       "auth": { "check": ["auth", "status"] },
       "effort": { "supported": ["low", "medium", "high", "xhigh", "max"], "cap": "xhigh", "banned": ["max"] },
-      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15, "apiStallSeconds": 120, "toolStallMinutes": 60 },
       "options": { "permissionMode": "acceptEdits", "allowedTools": ["Read", "Write", "Edit"] }
     },
     "codex": {
@@ -21,7 +21,7 @@
       "command": "codex",
       "auth": { "check": ["login", "status"] },
       "effort": { "supported": ["low", "medium", "high", "xhigh", "max"], "cap": "max", "banned": ["ultra"] },
-      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15, "apiStallSeconds": 120, "toolStallMinutes": 60 },
       "options": { "sandbox": "workspace-write", "approvalPolicy": "never" }
     },
     "gemini": {
@@ -31,7 +31,7 @@
       "command": "gemini",
       "auth": { "env": ["GEMINI_API_KEY"] },
       "effort": { "supported": [], "cap": "", "banned": [] },
-      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15, "apiStallSeconds": 120, "toolStallMinutes": 60 },
       "options": { "approvalMode": "auto_edit" }
     },
     "codebuddy": {
@@ -41,7 +41,7 @@
       "command": "codebuddy",
       "auth": { "check": [] },
       "effort": { "supported": ["low", "medium", "high"], "cap": "high", "banned": [] },
-      "limits": { "timeoutMinutes": 60, "stallMinutes": 15 },
+      "limits": { "timeoutMinutes": 60, "stallMinutes": 15, "apiStallSeconds": 120, "toolStallMinutes": 60 },
       "options": { "permissionMode": "acceptEdits" }
     }
   },

@@ -79,6 +79,7 @@ export function commandExists(command) {
 export function runProcess({
   command, prefixArgs = [], args = [], cwd = process.cwd(), env = null,
   timeoutMs = 600_000, logPath = null, header = null, stallMinutes = null,
+  classify = null, apiStallSeconds = 120, toolStallMinutes = 60,
 } = {}) {
   let stream = null
   if (logPath) {
@@ -107,7 +108,9 @@ export function runProcess({
     let stderr = ''
     let timedOut = false
     let abortedReason = null
-    const watchdog = stallMinutes === 0 ? null : createWatchdog({ stallMs: (stallMinutes ?? 10) * 60_000 })
+    const watchdog = (!classify && stallMinutes !== 0)
+      ? createWatchdog({ stallMs: (stallMinutes ?? 10) * 60_000 })
+      : null
 
     const killTree = () => {
       try {
@@ -125,10 +128,55 @@ export function runProcess({
         }, 30_000)
       : null
 
-    const feed = (s, channel) => {
-      if (!watchdog || abortedReason) return
-      const hit = watchdog.onData(s, { channel })
-      if (hit) { abortedReason = hit; killTree() }
+    // 事件级心跳：区分「API 静默」与「工具/命令在跑」
+    const lineBuf = { stdout: '', stderr: '' }
+    const activeTools = new Set()
+    let toolSeq = 0
+    let lastActivity = Date.now()
+    const heartbeat = classify
+      ? setInterval(() => {
+          if (abortedReason) return
+          const idle = Date.now() - lastActivity
+          const limitMs = activeTools.size > 0
+            ? Math.max(0.01, toolStallMinutes) * 60_000
+            : Math.max(0.01, apiStallSeconds) * 1000
+          if (idle > limitMs) {
+            abortedReason = activeTools.size > 0 ? 'tool_stall' : 'stall'
+            killTree()
+          }
+        }, 5_000)
+      : null
+
+    const onData = (s, channel) => {
+      lastActivity = Date.now()
+      if (!classify) {
+        if (!watchdog || abortedReason) return
+        const hit = watchdog.onData(s, { channel })
+        if (hit) { abortedReason = hit; killTree() }
+        return
+      }
+      lineBuf[channel] += s
+      if (lineBuf[channel].length > 2_000_000) lineBuf[channel] = lineBuf[channel].slice(-1_000_000)
+      for (;;) {
+        const idx = lineBuf[channel].indexOf('\n')
+        if (idx < 0) break
+        const line = lineBuf[channel].slice(0, idx).trim()
+        lineBuf[channel] = lineBuf[channel].slice(idx + 1)
+        if (!line) continue
+        let evt = null
+        try { evt = classify(line, channel) } catch { evt = null }
+        if (!evt) continue
+        if (evt.kind === 'error') {
+          abortedReason = evt.reason || 'error'
+          killTree()
+          return
+        }
+        if (evt.kind === 'tool_start') activeTools.add(evt.id || ('t' + (++toolSeq)))
+        else if (evt.kind === 'tool_end') {
+          if (evt.id) activeTools.delete(evt.id)
+          else activeTools.clear()
+        }
+      }
     }
 
     child.stdout.on('data', (d) => {
@@ -136,19 +184,20 @@ export function runProcess({
       stdout += s
       if (stdout.length > MAX_BUFFER) stdout = stdout.slice(-MAX_BUFFER)
       if (stream) stream.write(s)
-      feed(s, 'stdout')
+      onData(s, 'stdout')
     })
     child.stderr.on('data', (d) => {
       const s = d.toString()
       stderr += s
       if (stderr.length > MAX_BUFFER) stderr = stderr.slice(-MAX_BUFFER)
       if (stream) stream.write(s)
-      feed(s, 'stderr')
+      onData(s, 'stderr')
     })
 
     const finish = (payload) => {
       clearTimeout(timer)
       if (stallTimer) clearInterval(stallTimer)
+      if (heartbeat) clearInterval(heartbeat)
       if (abortedReason) payload = { ...payload, exitCode: 125, abortedReason, error: abortedReason }
       if (stream) {
         try {
@@ -156,7 +205,7 @@ export function runProcess({
           stream.end()
         } catch { /* ignore */ }
       }
-      resolve(payload)
+      resolve({ abortedReason: null, ...payload })
     }
 
     child.on('error', (err) => {
@@ -182,3 +231,4 @@ export function assertArg(name, value) {
   if (value == null || String(value).length === 0) throw new Error(`${name} is empty`)
   return String(value)
 }
+

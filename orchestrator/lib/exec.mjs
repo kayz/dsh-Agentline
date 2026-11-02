@@ -6,6 +6,7 @@ import { getAdapter } from './adapters/index.mjs'
 import { readMailbox, archiveMailbox } from './control.mjs'
 import { hasChangesBesides, worktreeFingerprint, dropCheckpoint } from './git.mjs'
 import { writeHandoff } from './handoff.mjs'
+import { pendingInputs, markConsumed } from './inputs.mjs'
 
 // 网络抖动（TLS 断流、连接重置）不是模型能力问题：应重试同一模型，而不是换候选
 const TRANSIENT = /tls handshake|stream disconnected|econnreset|etimedout|socket hang up|fetch failed|reconnecting|network error|workspace routing discovery|timed out/i
@@ -126,7 +127,9 @@ export async function executeRole({
 
     const effort = clampEffort(effortOverride || config.roles[role].effort || config.effort.default, provider)
     const mailbox = readMailbox(dir)
-    const prompt = buildPrompt({ role, repo, dir, taskId, round, mailbox, handoff })
+    const pending = pendingInputs(dir)
+    const userInputs = pending.map((i) => ({ kind: i.kind, text: i.text }))
+    const prompt = buildPrompt({ role, repo, dir, taskId, round, mailbox, handoff, userInputs })
     const logsDir = path.join(dir, 'logs')
     fs.mkdirSync(logsDir, { recursive: true })
     const logPath = path.join(logsDir, `${role}-r${round}-${idx + 1}.log`)
@@ -193,6 +196,7 @@ export async function executeRole({
         history: [...(st.history || []), { at: new Date().toISOString(), from: st.status, to: spec.to, by: `${role}:${model.key}${handoff ? ' (inherited c' + handoff.fromIndex + ')' : ''}` }],
       }
       appendRun(dir, record)
+      markConsumed(dir, pending.map((i) => i.id))
       archiveMailbox(dir)
       for (const ref of checkpointRefs) { try { await dropCheckpoint(repo, ref) } catch { /* ignore */ } }
       writeState(dir, nextState)
@@ -274,3 +278,4 @@ export function readVerdict(dir, round) {
   }
   return null
 }
+

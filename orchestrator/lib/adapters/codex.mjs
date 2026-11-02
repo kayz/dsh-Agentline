@@ -13,6 +13,26 @@ export function parseCodexModels(data) {
     }))
 }
 
+/** 解析 codex --json 事件：command_execution 等工具调用用于心跳分类 */
+export function classifyCodexLine(line) {
+  const t = String(line || '').trim()
+  if (!t.startsWith('{')) return null
+  let e
+  try { e = JSON.parse(t) } catch { return null }
+  if (e.type === 'item.started' || e.type === 'item.completed') {
+    const item = e.item || {}
+    const id = item.id
+    const toolTypes = ['command_execution', 'mcp_tool_call', 'file_change', 'patch_apply']
+    if (toolTypes.includes(item.type)) {
+      return { kind: e.type === 'item.started' ? 'tool_start' : 'tool_end', id }
+    }
+    return { kind: 'activity' }
+  }
+  if (e.type === 'turn.failed') return { kind: 'error', reason: e.error?.message || 'turn failed' }
+  if (e.type === 'error') return { kind: 'error', reason: e.message || 'error' }
+  return { kind: 'activity' }
+}
+
 export const codex = (cfg) => ({
   id: 'codex-cli',
   source: 'openai',
@@ -61,6 +81,9 @@ export const codex = (cfg) => ({
       command: cfg.command, args, cwd, env, timeoutMs, logPath,
       header: '=== PROMPT ===\n' + prompt + '\n=== STREAM ===',
       stallMinutes: cfg.limits?.stallMinutes,
+      classify: classifyCodexLine,
+      apiStallSeconds: cfg.limits?.apiStallSeconds ?? 120,
+      toolStallMinutes: cfg.limits?.toolStallMinutes ?? 60,
     })
 
     let usage = null

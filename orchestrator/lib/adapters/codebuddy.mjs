@@ -1,5 +1,6 @@
 import { runCapture, runProcess } from '../process.mjs'
 import { lastJson, parseEventLines, envFor, effortArgs } from './shared.mjs'
+import { classifyClaudeLine } from './claude.mjs'
 
 /** 从 `--help` 文本里解析 CodeBuddy 支持的模型；导出供测试 */
 export function parseCodebuddyModels(helpText) {
@@ -46,6 +47,9 @@ export const codebuddy = (cfg) => ({
       command: cfg.command, args, cwd, env, timeoutMs, logPath,
       header: '=== PROMPT ===\n' + prompt + '\n=== STREAM ===',
       stallMinutes: cfg.limits?.stallMinutes,
+      classify: classifyClaudeLine,
+      apiStallSeconds: cfg.limits?.apiStallSeconds ?? 120,
+      toolStallMinutes: cfg.limits?.toolStallMinutes ?? 60,
     })
     const events = parseEventLines(res.stdout)
     const results = events.filter((x) => x && x.type === 'result')

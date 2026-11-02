@@ -73,7 +73,7 @@ brief.md  design.md  acceptance.md  impl.md  review.md  state.json  run.log
 
 **没有证据的执行不算数。** 评审引用 CI 结果与文件行号，而不是「我看了，没问题」。
 
-### 任务校验（协议 v0.2.0）
+### 任务校验（协议 v0.3.0）
 
 `AgentLine/tools/check-task.ps1` 只读校验一个任务的证据链：
 
@@ -107,6 +107,31 @@ pwsh -NoProfile -File AgentLine/tools/check-task.ps1 -RepoRoot <repo> -TaskDir .
 - `--priority` 允许超出槽位上限（但不绕过 scope 冲突）；`--in-place` 回到旧的单工作区模式（独占）。
 - `flow` 在 worktree 中提交；`check` / `status` 自动定位任务目录；`merge` 在主工作区合并后删除 worktree 与分支。
 - 配置项：`worktree.{enabled,dir,baseRef}`、`concurrency.{maxTasks,pollSeconds,wait}`。
+
+## 运行中输入（P3）
+
+- `note`：实现提示，注入下一阶段 prompt；阶段成功后标记 consumed。
+- `amendment`：规格修正，当前 dev/review 轮作废；阶段末 blocked(`amendment_pending`)，`flow --resume` 后退回 design 升版。
+- `attention`：designer 遇到致命歧义时写 `<task>/attention.json`，流程停在 `awaiting_human`；用 `answer` 回答后 `--resume` 继续。
+- 全部输入记录在 `<task>/inputs.jsonl`，不会静默丢失。
+
+```powershell
+node agentline.mjs input  --task 001 --kind note --text "注意锁顺序"
+node agentline.mjs input  --task 001 --kind amendment --text "验收改成 Y"
+node agentline.mjs answer --task 001 --text "选 A"
+node agentline.mjs inputs --task 001
+```
+
+## stall 心跳（P3）
+
+claude / codex / codebuddy 的流式事件会被解析：`tool_use` / `item.started` 视为工具在跑，
+用 `toolStallMinutes`（默认 60）计算；没有工具时按 `apiStallSeconds`（默认 120）判定 API 静默并快速换模。
+不再对整段执行盲等 `stallMinutes`。Gemini 当前是 json 输出，仍按 `stallMinutes` 兜底。
+
+## 本机插件接入（后续任务）
+
+公开 core 与 DSH 插件解耦。把驾驶舱接到 P3 内核的清单与验收步骤见
+[docs/02-plugin-upgrade.md](docs/02-plugin-upgrade.md)；在升级前，驾驶舱仍使用旧调度器。
 
 ## 快速开始（调度器）
 
@@ -186,12 +211,13 @@ node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许�
 
 ## 仓库内容
 
-- [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（v0.2.0：状态/产物、write_scope、模型隔离）；
+- [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（v0.3.0：状态/产物、write_scope、模型隔离、运行中输入）；
 - [`AgentLine/templates/`](AgentLine/templates/)：六个交接文件模板（design 含 write_scope 示例）；
 - [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：skill 只读自检（C1–C9）；
 - [`AgentLine/tools/check-task.ps1`](AgentLine/tools/check-task.ps1)：任务证据链只读校验；
 - [`orchestrator/`](orchestrator/)：调度器内核（`agentline.mjs` + `lib/` + `config/` + `test/`）；
-- [`docs/01-positioning-and-roadmap.md`](docs/01-positioning-and-roadmap.md)：定位与路线（与 DSH Super-agent 的关系）。
+- [`docs/01-positioning-and-roadmap.md`](docs/01-positioning-and-roadmap.md)：定位与路线（与 DSH Super-agent 的关系）；
+- [`docs/02-plugin-upgrade.md`](docs/02-plugin-upgrade.md)：本机 DSH 插件接入新内核的后续任务与验收清单。
 
 ## 测试
 
@@ -200,7 +226,7 @@ cd orchestrator
 npm test
 ```
 
-测试覆盖配置分层、模型发现解析、候选切换交班、`no_new_work`、worktree/队列与 check-task；不调用真实模型。
+测试覆盖配置分层、模型发现解析、候选切换交班、`no_new_work`、worktree/队列、check-task、stall 心跳与运行中输入；不调用真实模型。
 
 ## 设计原则
 

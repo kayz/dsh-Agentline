@@ -1,7 +1,7 @@
 ---
 name: AgentLine
 description: 设计→开发→验证三角色协作协议。当任务需要不同 agent 或模型分别设计、实现、验收，并通过 .collab/tasks/<NNN>/ 下的固定文件交接时使用。
-version: 0.2.0
+version: 0.3.0
 ---
 
 # AgentLine
@@ -125,6 +125,16 @@ developer 只能修改这些路径；`check-task.ps1` 会用 git diff 校验，�
 调度器模式另有换候选交班：新的候选先读 handoff 单，明确选择保留现场继续或回滚重做，并用新产出证明不是「继承即完成」。
 
 调度器默认每个任务在独立 git worktree 中执行，主工作区停在 main；进入 dev 前按 `write_scope` 申请执行槽，范围相交的任务排队而不是并发写同一片区域。
+
+## 运行中输入
+
+调度器模式下，运行中可以追加三类输入（记录在 `<task>/inputs.jsonl`）：
+
+- `note`：实现提示，注入下一阶段提示词；阶段成功后标记 consumed。
+- `amendment`：需求/规格修正；当前 dev/review 轮作废，流程在阶段末 blocked(`amendment_pending`)，`flow --resume` 后退回 design 升版。
+- `answer`：对 designer 的 `attention.json` 的回答；design 重新读取后继续。
+
+designer 认为需求存在致命歧义时，写 `<task>/attention.json`（question/options/default），不要猜；流程停在 `awaiting_human`，等人回答后 resume。
 
 ## 规则
 
