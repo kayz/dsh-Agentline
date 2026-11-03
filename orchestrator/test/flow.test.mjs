@@ -44,8 +44,9 @@ function configFor(models) {
   return base
 }
 
-test('candidate switch writes handoff and next candidate sees it', async () => {
+test('candidate switch writes handoff and next candidate sees it', async (t) => {
   const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
   const prompts = []
   const adapterFactory = () => ({
     async run({ prompt, model, logPath }) {
@@ -85,8 +86,9 @@ test('candidate switch writes handoff and next candidate sees it', async () => {
   assert.equal(runs[1].inherited_from?.candidate, 1)
 })
 
-test('inheriting without new work fails as no_new_work', async () => {
+test('inheriting without new work fails as no_new_work', async (t) => {
   const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
   const adapterFactory = () => ({
     async run({ model, logPath }) {
       fs.writeFileSync(logPath, `fake ${model}\n`, 'utf8')

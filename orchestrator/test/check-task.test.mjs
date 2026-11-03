@@ -52,8 +52,9 @@ const runCheck = (repo) => spawnSync('pwsh', [
   '-RepoRoot', repo, '-TaskDir', '.collab/tasks/001',
 ], { encoding: 'utf8' })
 
-test('check-task passes a complete task', { skip }, () => {
+test('check-task passes a complete task', { skip }, (t) => {
   const { repo } = makeTaskRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
   const r = runCheck(repo)
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.match(r.stdout, /PASS/)

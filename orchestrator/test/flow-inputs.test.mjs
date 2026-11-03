@@ -38,8 +38,12 @@ function makeConfig() {
   }
 }
 
-test('attention pauses for a human answer, then resumes design', { skip, timeout: 60_000 }, async () => {
+test('attention pauses for a human answer, then resumes design', { skip, timeout: 60_000 }, async (t) => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-attn-'))
+  t.after(() => {
+    try { execFileSync('git', ['worktree', 'remove', '--force', path.join(repo, '.collab', 'worktrees', '001')], { cwd: repo }) } catch { /* ignore */ }
+    fs.rmSync(repo, { recursive: true, force: true })
+  })
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' })
   git('init', '-q', '-b', 'main')
   git('config', 'user.email', 'test@example.com')

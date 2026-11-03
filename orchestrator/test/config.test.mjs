@@ -1,13 +1,21 @@
-import test from 'node:test'
+import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { loadConfig, deepMerge, missingRoleSetup, validateConfig } from '../lib/config.mjs'
 
+const tempDirs = []
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-config-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-config-'))
+  tempDirs.push(dir)
+  return dir
 }
+after(() => {
+  for (const dir of tempDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* ignore */ }
+  }
+})
 
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true })

@@ -13,8 +13,12 @@ const CI_RUNNER = path.join(ROOT, 'tools', 'ci-runner.ps1')
 const CHECK_TASK = path.resolve(ROOT, '..', 'AgentLine', 'tools', 'check-task.ps1')
 const skip = process.platform !== 'win32' || spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).status !== 0
 
-test('flow runs in a worktree, passes CI/review, leaves main clean', { skip, timeout: 60_000 }, async () => {
+test('flow runs in a worktree, passes CI/review, leaves main clean', { skip, timeout: 60_000 }, async (t) => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-flowwt-'))
+  t.after(() => {
+    try { execFileSync('git', ['worktree', 'remove', '--force', path.join(repo, '.collab', 'worktrees', '001')], { cwd: repo }) } catch { /* ignore */ }
+    fs.rmSync(repo, { recursive: true, force: true })
+  })
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' })
   git('init', '-q', '-b', 'main')
   git('config', 'user.email', 'test@example.com')
