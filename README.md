@@ -2,7 +2,8 @@
 
 > 让不同模型分别做设计、实现和验收；每一步留下可复核的证据；合并由人放行。
 
-AgentLine 是一套跑在 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）生态里的多模型协作工作方式。
+AgentLine 是一套多模型协作工作方式：调度器内核可以单独用 CLI 运行，也可以通过插件在
+[DeepSeek Harness](https://github.com/deepseek-ai)（DSH）里使用。负责什么、不负责什么，见 [SCOPE.md](SCOPE.md)。
 它不追求「一句话全自动」，而是把一次改动拆成三个角色，用固定文件交接，用可执行命令验收，
 把「做完了」变成「证据在这里」。
 
@@ -219,6 +220,7 @@ node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许�
 - [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：skill 只读自检（C1–C9）；
 - [`AgentLine/tools/check-task.ps1`](AgentLine/tools/check-task.ps1)：任务证据链只读校验；
 - [`orchestrator/`](orchestrator/)：调度器内核（`agentline.mjs` + `lib/` + `config/` + `test/`）；
+- [`SCOPE.md`](SCOPE.md)：边界：负责什么、不负责什么、怎样与其他工具配合；
 - [`docs/01-positioning-and-roadmap.md`](docs/01-positioning-and-roadmap.md)：定位与路线（与 DSH Super-agent 的关系）；
 - [`docs/02-plugin-upgrade.md`](docs/02-plugin-upgrade.md)：本机 DSH 插件接入新内核的后续任务与验收清单。
 

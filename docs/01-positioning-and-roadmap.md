@@ -2,6 +2,8 @@
 
 > 日期：2026-11-01 · 基线提交：`36b814a`
 > 背景输入：DeepSeek Harness《Super-agent 设计探索：迈向更自主的 Agent 系统》及开源原型 `dsh-superagent-prototype`；`AgentLine` 在 `fovea`、`skills`、`SpringExam` 等仓库中的 `.collab/` 实测运行记录。
+>
+> 2026-11-03 补充：边界以 [SCOPE.md](../SCOPE.md) 为准。下文的“挂载态”指一个独立的可选适配包，内核不依赖 Super-agent；文末链接的 02、03 两份文档尚未编写。
 
 ## 1. 核心判断与定位调整
 
