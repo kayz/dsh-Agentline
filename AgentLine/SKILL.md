@@ -21,7 +21,7 @@ version: 0.3.0
 
 - 输入：brief.md。
 - 输出：design.md、acceptance.md。
-- 明确目标、非目标、写入范围（`write_scope`）和判定逻辑；禁止写产品代码。
+- 明确目标、非目标、写入范围（`write_scope`）、失败/取消边界、资源约束和判定逻辑；禁止写产品代码。
 
 ### developer（开发）
 
@@ -141,7 +141,7 @@ designer 认为需求存在致命歧义时，写 `<task>/attention.json`（quest
 1. 每个角色只写自己负责的交接文件（见上表）；产品代码写入范围以 design.md 的 write_scope 为准，state.json 由当前阶段角色或调度器维护。
 2. 验证模型不得与开发模型相同：verifier 开始前比较 dev 与 verifier 的实际模型标识；相同或任一为空则拒绝验证，并在 review.md 写明原因。调度器模式以 run.json 的 model_resolved 为准。
 3. acceptance.md 只能由 designer 修改。developer 认为某条无法执行时，在 impl.md 写明原因并退回 design，不自行修改 design.md 或 acceptance.md。
-4. 每条验收必须是 PowerShell 7 单行命令、零第三方依赖、能独立判定通过或失败；acceptance.md 使用 `## AC-n 标题`、`- 命令:`、`- 期望:` 格式。
+4. 每条验收必须是 PowerShell 7 单行命令、零第三方依赖、能独立判定通过或失败；acceptance.md 使用 `## AC-n 标题`、`- 命令:`、`- 期望:` 格式。涉及 I/O、异步任务或持久化状态变更时，除正常路径外，须包含至少一条针对失败/取消恢复或底层调用次数/资源上限的可执行断言。
 5. 交接文件名全部小写、固定；修改时覆盖原文件，历史版本靠 git 保留；run.log 只能追加。
 6. 调度器模式下 state.json 的 status 只能由调度器或明确授权的阶段推进；手工改 status 视为伪造证据。
 7. `write_scope` 只允许缩小，不允许在开发阶段扩大；需要扩大时退回 designer 修改 design.md 并重新验收。
