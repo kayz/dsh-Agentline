@@ -18,6 +18,13 @@ export function classifyClaudeLine(line) {
     if (res) return { kind: 'tool_end', id: res.tool_use_id }
     return { kind: 'activity' }
   }
+  if (e.type === 'rate_limit_event') {
+    const status = e.rate_limit_info?.status
+    if (/rejected|blocked|exceeded|denied/i.test(String(status || ''))) {
+      return { kind: 'error', reason: `rate_limit ${status}` }
+    }
+    return { kind: 'activity' }
+  }
   if (e.type === 'result') return e.is_error ? { kind: 'error', reason: e.result || 'result error' } : { kind: 'activity' }
   if (e.type === 'error') return { kind: 'error', reason: e.message || 'error' }
   return { kind: 'activity' }

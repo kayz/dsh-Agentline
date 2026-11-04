@@ -164,7 +164,8 @@ export function runProcess({
         const line = lineBuf[channel].slice(0, idx).trim()
         lineBuf[channel] = lineBuf[channel].slice(idx + 1)
         if (!line) continue
-        if (channel === 'stderr' && RATE_LIMIT_RE.test(line)) {
+        const stdoutRateLimit = channel === 'stdout' && /^\s*(?:error\b[:\s]*)?429\b|^\s*(?:error|fatal|panic)\b.*(?:rate.?limit|quota|频率限制|使用量)/i.test(line)
+        if (RATE_LIMIT_RE.test(line) && (channel === 'stderr' || stdoutRateLimit)) {
           abortedReason = 'rate_limit'
           killTree()
           return
