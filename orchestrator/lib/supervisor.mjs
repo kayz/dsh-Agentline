@@ -22,7 +22,7 @@
 
 export const RULES = [
   { id: 'capacity', re: /at capacity|no available capacity|capacity is (full|exhausted)|overloaded|模型.{0,6}(繁忙|容量不足|过载)/i },
-  { id: 'rate_limit', re: /rate.?limit(ed)?|too many requests|quota exceeded|请求过于频繁|限流|(status|http)\s*429/i },
+  { id: 'rate_limit', re: /rate.?limit(ed)?|too many requests|quota exceeded|请求过于频繁|频率限制|限流|使用量.{0,12}(?:频率|限制)|额度.{0,8}(?:用尽|超出)|(?:^|\n)\s*429\b|(?:status|http|错误)\s*[:=]?\s*429/i },
   { id: 'auth', re: /\b(401|403)\b|unauthorized|invalid api key|not logged in|please log ?in|authentication failed|未登录|认证失败/i },
   { id: 'context', re: /context (length|window) (exceeded|too long)|maximum context|too many tokens|上下文.{0,8}(超出|过长)/i },
   // 网络证据分两类，必须分开匹配（2026-11-02 第三次误判的教训）：

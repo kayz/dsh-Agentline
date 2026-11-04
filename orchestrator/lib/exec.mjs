@@ -244,8 +244,10 @@ export async function executeRole({
     appendRun(dir, record)
   }
 
+  const blockedReason = classifyError(lastError)
   const blocked = {
-    ...st, status: 'blocked', role, blocked_reason: classifyError(lastError),
+    ...st, status: 'blocked', role, blocked_reason: blockedReason,
+    ...(blockedReason === 'rate_limit' ? { rate_limit_reset: parseRateLimitReset(lastError) } : {}),
     switches: prevSwitches + switches, updated_at: new Date().toISOString(),
     handoff: handoff ? handoff.file : null,
     history: [...(st.history || []), { at: new Date().toISOString(), from: st.status, to: 'blocked', by: role, reason: lastError }],
@@ -254,10 +256,20 @@ export async function executeRole({
   return { ok: false, error: lastError, state: blocked, handoff: handoff ? handoff.file : null }
 }
 
+/** 从限流文案里摘出重置时间，原样保留时区（例如 "2026-11-05 00:15:26 UTC+8"） */
+export function parseRateLimitReset(err) {
+  const s = String(err || '')
+  const m = s.match(/将在\s*([^。\n]+?)\s*重置/)
+  if (m) return m[1].trim()
+  const at = s.match(/reset(?:s)?\s*(?:at|in)?\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9:.]+(?:\s*UTC[+-][0-9]{1,2}(?::[0-9]{2})?)?)/i)
+  return at ? at[1].trim() : null
+}
+
 export function classifyError(err) {
   const s = String(err || '').toLowerCase()
   if (s.includes('capacity') || s.includes('overloaded')) return 'capacity'
-  if (s.includes('rate_limit') || s.includes('ratelimit') || s.includes('quota')) return 'rate_limit'
+  if (/\b429\b/.test(s)
+    || /usage limit|session limit|hit your .{0,20}limit|rate.?limit|too many requests|quota (?:exceeded|exhausted)|frequency limit|请求过于频繁|频率限制|限流|使用量.{0,12}(?:频率|限制)|额度.{0,8}(?:用尽|超出)/i.test(s)) return 'rate_limit'
   if (s.includes('stall')) return 'stall'
   if (s.includes('context')) return 'context'
   if (s.includes('timeout')) return 'timeout'
@@ -278,4 +290,5 @@ export function readVerdict(dir, round) {
   }
   return null
 }
+
 

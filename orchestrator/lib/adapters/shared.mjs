@@ -42,3 +42,10 @@ export function effortArgs(cfg, effort) {
   const supported = cfg.effort?.supported || []
   return effort && supported.includes(effort) ? effort : (supported[0] || null)
 }
+
+/** 失败时保留 stderr 尾部，供 classifyError 识别 429/限流等文案 */
+export function failureText(res) {
+  const s = String(res?.stderr || '').trim()
+  if (!s) return ''
+  return s.split(/\r?\n/).slice(-8).join('\n').slice(-1200)
+}

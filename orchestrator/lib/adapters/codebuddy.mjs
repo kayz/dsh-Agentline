@@ -1,5 +1,5 @@
 import { runCapture, runProcess } from '../process.mjs'
-import { lastJson, parseEventLines, envFor, effortArgs } from './shared.mjs'
+import { lastJson, parseEventLines, envFor, effortArgs, failureText } from './shared.mjs'
 import { classifyClaudeLine } from './claude.mjs'
 
 /** 从 `--help` 文本里解析 CodeBuddy 支持的模型；导出供测试 */
@@ -61,12 +61,13 @@ export const codebuddy = (cfg) => ({
       cache_write: j.usage.cache_creation_input_tokens ?? null,
       cost_usd: j.total_cost_usd ?? null,
     } : null
+    const apiError = j && j.is_error ? (j.result || j.error?.message || 'is_error') : null
     return {
       exitCode: res.timedOut ? 124 : res.exitCode,
       usage,
       usageSource: usage ? 'cli_json' : 'none',
       modelResolved: j?.model || null,
-      error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || (res.exitCode === 0 ? null : `exit ${res.exitCode}`))),
+      error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || apiError || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },
 })

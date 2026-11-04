@@ -10,6 +10,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createWatchdog } from './supervisor.mjs'
 
+const RATE_LIMIT_RE = /(?:^|\b)429\b|rate.?limit|too many requests|quota (?:exceeded|exhausted)|usage limit|session limit|frequency limit|请求过于频繁|频率限制|限流|使用量.{0,12}(?:频率|限制)/i
 const MAX_BUFFER = 8 * 1024 * 1024
 const resolveCache = new Map()
 
@@ -163,6 +164,11 @@ export function runProcess({
         const line = lineBuf[channel].slice(0, idx).trim()
         lineBuf[channel] = lineBuf[channel].slice(idx + 1)
         if (!line) continue
+        if (channel === 'stderr' && RATE_LIMIT_RE.test(line)) {
+          abortedReason = 'rate_limit'
+          killTree()
+          return
+        }
         let evt = null
         try { evt = classify(line, channel) } catch { evt = null }
         if (!evt) continue
@@ -231,4 +237,5 @@ export function assertArg(name, value) {
   if (value == null || String(value).length === 0) throw new Error(`${name} is empty`)
   return String(value)
 }
+
 

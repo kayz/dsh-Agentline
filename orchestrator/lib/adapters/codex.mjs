@@ -1,5 +1,5 @@
 import { runCapture, runProcess } from '../process.mjs'
-import { lastJson, envFor, effortArgs } from './shared.mjs'
+import { lastJson, envFor, effortArgs, failureText } from './shared.mjs'
 
 /** 把 `codex debug models` 的 JSON 归一化；导出供测试 */
 export function parseCodexModels(data) {
@@ -119,7 +119,7 @@ export const codex = (cfg) => ({
       usage,
       usageSource: usage ? 'cli_json' : 'none',
       modelResolved: null,
-      error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || failure || (res.exitCode === 0 ? null : `exit ${res.exitCode}`))),
+      error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || failure || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },
 })
