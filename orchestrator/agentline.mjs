@@ -8,7 +8,8 @@
  *   node agentline.mjs preflight
  *   node agentline.mjs run     --task 001 --role design [--repo <path>]
  *   node agentline.mjs flow    --task 001 [--repo <path>]
- *   node agentline.mjs merge   --task 001 --permission "允许合并"
+ *   node agentline.mjs merge   --task 001 --permission "允许合并" | --grant | --check
+ *   node agentline.mjs grant   --tasks 016-023 --hours 24 --text "用户原话" | --list | --revoke <id>
  *   node agentline.mjs stop    --task 001 [--now]
  *
  * 设计：base 配置（仓库）+ local 覆盖（本机）+ 发现缓存（模型目录）。
@@ -35,6 +36,7 @@ import { resolveTaskDir } from './lib/worktree.mjs'
 import { appendInput, readInputs, pendingInputs, readAttention } from './lib/inputs.mjs'
 import { runningTasks, releaseCapacity, releaseTaskLock, taskLockHolder } from './lib/registry.mjs'
 import { writeNotice, printReport } from './lib/report.mjs'
+import { evaluateMerge, describeTier, activeGrantFor, listGrants, addGrant, revokeGrant, isGrantActive } from './lib/merge-policy.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const log = (m = '') => console.log(m)
@@ -321,15 +323,43 @@ async function cmdFlow() {
 
 async function cmdMerge() {
   const permission = args.permission
+  const useGrant = args.grant === true
   const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
   const taskDir = located?.dir || dir
   const st = readState(taskDir)
   if (!st) fail(`no state.json in ${taskDir}`)
-  if (!permission || typeof permission !== 'string') fail('refuse: merge 需要人类许可：agentline merge --task <id> --permission "允许合并"')
+  const branchName = `task/${taskId}`
+
+  if (args.check) {
+    const risk = await evaluateMerge({ repo, taskDir, taskId, head: branchName, config, projectCfg, state: st })
+    const grant = activeGrantFor(await listGrants(repo), taskId)
+    log(JSON.stringify({ task: taskId, status: st.status, ...risk, grant: grant ? { id: grant.id, expires_at: grant.expires_at } : null }, null, 2))
+    return
+  }
+
+  if (permission && useGrant) fail('refuse: --permission 与 --grant 只能二选一')
+  if (!useGrant && (!permission || typeof permission !== 'string')) {
+    fail('refuse: merge 需要人类许可：agentline merge --task <id> --permission "允许合并"；低档任务也可以用 --grant 引用预授权')
+  }
   if (st.status !== 'pr_open') fail(`refuse: task status is ${st.status}, expected pr_open`)
 
-  const branchName = `task/${taskId}`
-  log(`human permission: "${permission}"`)
+  let risk = null
+  try {
+    risk = await evaluateMerge({ repo, taskDir, taskId, head: branchName, config, projectCfg, state: st })
+  } catch (e) {
+    if (useGrant) fail(`refuse: 无法分档（${e.message}），不能用预授权合并`)
+    log(`WARN: 分档失败：${e.message}`)
+  }
+  log(`merge tier: ${describeTier(risk)}`)
+
+  let grant = null
+  if (useGrant) {
+    if (risk.tier !== 'low') fail(`refuse: task ${taskId} 需要逐个确认，不能用预授权合并：${risk.reasons.join('；')}`)
+    grant = activeGrantFor(await listGrants(repo), taskId)
+    if (!grant) fail(`refuse: 没有覆盖 task ${taskId} 的有效预授权（agentline grant --tasks <范围> --hours <n> --text "用户原话"）`)
+  }
+  const recorded = grant ? `预授权 ${grant.id}：${grant.text}` : permission
+  log(grant ? `grant: ${grant.id} "${grant.text}"（有效至 ${grant.expires_at}）` : `human permission: "${permission}"`)
   log(`merging ${branchName} → main`)
 
   const { spawn } = await import('node:child_process')
@@ -343,7 +373,7 @@ async function cmdMerge() {
 
   const co = await run(['checkout', 'main'])
   if (co.code !== 0) fail(`checkout main failed (工作区可能不干净): ${co.err || co.out}`)
-  const m = await run(['merge', '--no-ff', branchName, '-m', `merge: ${branchName} (human permission: ${permission})`])
+  const m = await run(['merge', '--no-ff', branchName, '-m', `merge: ${branchName} (${grant ? 'grant' : 'human permission'}: ${recorded})`])
   if (m.code !== 0) fail(`merge failed: ${m.err || m.out}`)
   const anc = await run(['merge-base', '--is-ancestor', branchName, 'main'])
   if (anc.code !== 0) fail(`merge verification failed: ${branchName} is not contained in main`)
@@ -357,10 +387,14 @@ async function cmdMerge() {
   const sha = await headSha(repo)
   const mainDir = path.join(repo, config.collabDir, taskId)
   if (!fs.existsSync(mainDir)) fail(`merged task dir missing in main: ${mainDir}`)
-  const next = setStatusAt(mainDir, 'merged', 'human', {
-    pr: { ...(st.pr || {}), state: 'merged', sha, merged_at: new Date().toISOString(), permission },
+  const next = setStatusAt(mainDir, 'merged', grant ? `grant:${grant.id}` : 'human', {
+    pr: {
+      ...(st.pr || {}), state: 'merged', sha, merged_at: new Date().toISOString(),
+      permission: recorded, permission_kind: grant ? 'grant' : 'explicit', grant_id: grant?.id || null,
+    },
+    merge_risk: risk,
   })
-  await commitAll(repo, `chore(${taskId}): mark merged after human permission`)
+  await commitAll(repo, `chore(${taskId}): mark merged after ${grant ? `grant ${grant.id}` : 'human permission'}`)
   log(`merged: ${sha}`)
 
   let deleted = false
@@ -376,6 +410,31 @@ async function cmdMerge() {
     writeNotice(mainDir, { task: taskId, event: 'merged', status: next.status, ci: ci ? `${ci.passed}/${ci.total}` : null, branch: branchName, summary: text })
   } catch { /* ignore */ }
   log(`state: ${next.status}`)
+}
+
+async function cmdGrant() {
+  try {
+    if (args.list) {
+      const grants = await listGrants(repo)
+      if (!grants.length) { log('没有预授权'); return }
+      const now = Date.now()
+      for (const g of grants) {
+        const state = isGrantActive(g, now) ? '有效' : (g.revoked_at ? '已撤销' : '已过期')
+        log(`${g.id}  ${state}  任务 ${g.tasks.join(',')}  至 ${g.expires_at}  「${g.text}」`)
+      }
+      return
+    }
+    if (args.revoke) {
+      const g = await revokeGrant(repo, String(args.revoke))
+      log(`已撤销 ${g.id}（${g.revoked_at}）`)
+      return
+    }
+    const g = await addGrant(repo, { tasks: args.tasks, hours: args.hours, text: args.text })
+    log(`预授权 ${g.id}：任务 ${g.tasks.join(',')}，有效至 ${g.expires_at}`)
+    log('只对低档任务生效（agentline merge --task <id> --grant）；其余任务仍需逐个 --permission')
+  } catch (e) {
+    fail(e.message)
+  }
 }
 
 async function cmdCheck() {
@@ -438,6 +497,10 @@ function help() {
   node agentline.mjs run   --task <id> --role <design|dev|review>
   node agentline.mjs flow  --task <id> [--max-rounds 2] [--resume] [--in-place] [--no-wait] [--priority] [--base <ref>]
   node agentline.mjs merge --task <id> --permission "允许合并"
+  node agentline.mjs merge --task <id> --grant              （仅低档，需有效预授权）
+  node agentline.mjs merge --task <id> --check              （只看分档，不合并）
+  node agentline.mjs grant --tasks 016-023 --hours 24 --text "用户原话"
+  node agentline.mjs grant --list | --revoke <id>
   node agentline.mjs stop  --task <id> [--now]
   node agentline.mjs check --task <id> [--strict|--lenient]
   node agentline.mjs input --task <id> --kind note|amendment --text "..."
@@ -462,6 +525,7 @@ switch (cmd) {
   case 'run': await cmdRun(); break
   case 'flow': await cmdFlow(); break
   case 'merge': await cmdMerge(); break
+  case 'grant': await cmdGrant(); break
   case 'stop': await cmdStop(); break
   case 'check': await cmdCheck(); break
   case 'input': cmdInput(); break

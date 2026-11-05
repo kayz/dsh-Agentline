@@ -76,6 +76,21 @@ export async function changedFiles(cwd, base = 'main') {
   return r.out ? r.out.split('\n') : []
 }
 
+/** base...head 的逐文件增删行数（不跟踪重命名；二进制文件记 0 行） */
+export async function diffNumstat(cwd, base, head = 'HEAD') {
+  const r = await git(['diff', '--numstat', '--no-renames', `${base}...${head}`], cwd)
+  if (r.code !== 0) throw new Error(`git diff --numstat ${base}...${head} failed: ${r.err || r.out}`)
+  if (!r.out) return []
+  return r.out.split('\n').map((line) => {
+    const [added, deleted, ...rest] = line.split('\t')
+    return {
+      file: rest.join('\t'),
+      added: added === '-' ? 0 : Number(added),
+      deleted: deleted === '-' ? 0 : Number(deleted),
+    }
+  })
+}
+
 // ── 候选切换（交班）用 ──────────────────────────────────────────
 /** git status --porcelain 的逐行结果 */
 export async function statusLines(cwd) {

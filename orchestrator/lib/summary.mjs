@@ -115,7 +115,11 @@ export async function buildSummary({ repo, taskId, dir, event, reason, branch } 
   if (acc.length) lines.push(`验收：${acc.join(' · ')}`)
 
   // 下一步
-  if (ev === 'pr_open') lines.push(`下一步：要合并就回复「允许合并 task ${taskId}」；想改就说明要改什么`)
+  if (ev === 'pr_open') {
+    const risk = st.merge_risk
+    const tier = risk?.tier === 'low' ? '（低档：有预授权时可直接合并）' : (risk ? `（需逐个确认：${risk.reasons.join('；')}）` : '')
+    lines.push(`下一步：要合并就回复「允许合并 task ${taskId}」${tier}；想改就说明要改什么`)
+  }
   else if (ev === 'merged') lines.push('下一步：无，任务已结束')
   else lines.push(`下一步：修好后让我继续（flow --resume）；或告诉我调整验收/范围`)
 

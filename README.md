@@ -56,7 +56,7 @@ verdict.json ── pass ──▶ pr_open ──▶ 人许可 ──▶ merge
 4. CI 逐条跑 AC，原始输出进 `ci-results.json`；
 5. verifier 独立复核（只读），写 `review.md` + `verdict.json`；
 6. 不通过就带着 findings 回到 developer，轮次有上限；超过上限进 `blocked` 队列交给人；
-7. 全部通过只到 `pr_open`。**合并需要人的许可**，agent 不会自我放行。
+7. 全部通过只到 `pr_open`。**合并需要人的许可**，agent 不会自我放行；低风险任务可以用人事先给出的预授权合并（见下文「合并分档」）。
 
 ## 交接与证据
 
@@ -88,6 +88,35 @@ pwsh -NoProfile -File AgentLine/tools/check-task.ps1 -RepoRoot <repo> -TaskDir .
 - 默认严格；`-Lenient` 把历史 verdict/日志缺失降级为 WARN；
 - `-Strict` 要求 design.md 必须声明 `write_scope`；
 - 不执行 acceptance，也不修改任何文件。
+
+## 合并分档
+
+到 `pr_open` 时调度器给任务分档，写入 `state.merge_risk`：
+
+- **low**：评审 ≤ 3 轮；design.md 声明了 `write_scope` 且改动全部落在其中；改动 ≤ 8 个文件且增删 ≤ 3000 行。可以用预授权合并。
+- **confirm**：任一条件不满足，必须逐个任务给出许可。
+
+统计不含任务自己的 `.collab/tasks/<NNN>/`；阈值可在 `policy.merge.low` 或项目的 `.collab/agentline.json` 里 `merge.low` 覆盖。
+调度器模式要求 design.md 必须声明 `write_scope`：缺失时让 designer 补写一次，仍缺失则 `blocked(write_scope_missing)`。
+
+```powershell
+# 只评估，不合并
+node agentline.mjs merge --task 001 --check
+
+# 预授权：有范围、有时限（≤ 168 小时），记录用户原话；可列出、可撤销
+node agentline.mjs grant --tasks 016-023 --hours 8 --text "按 S3 依次推进到合并"
+node agentline.mjs grant --list
+node agentline.mjs grant --revoke <id>
+
+# low 档：用预授权合并；confirm 档会拒绝并给出原因
+node agentline.mjs merge --task 017 --grant
+
+# 任意档：逐个确认
+node agentline.mjs merge --task 018 --permission "允许合并"
+```
+
+预授权存放在 `<repo>/.git/agentline/grants.json`（不进版本库），合并记录里写明 `permission_kind`（`explicit` / `grant`）和 `grant_id`。
+它防的是临场批量放行，不防伪造：CLI 无法验证调用者是不是人。
 
 ## 失败处理：换模型，也换现场
 
