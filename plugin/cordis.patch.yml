@@ -1,0 +1,5 @@
+# dsh-agentline bundle layer: registers the host half (web routes + tools).
+# The browser half is discovered through package.json's dsh.client manifest.
+- insert:
+    - id: dsh-agentline
+      name: dsh-agentline

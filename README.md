@@ -74,7 +74,7 @@ brief.md  design.md  acceptance.md  impl.md  review.md  state.json  run.log
 
 **没有证据的执行不算数。** 评审引用 CI 结果与文件行号，而不是「我看了，没问题」。
 
-### 任务校验（协议 v0.3.0）
+### 任务校验（协议 v0.4.0）
 
 `AgentLine/tools/check-task.ps1` 只读校验一个任务的证据链：
 
@@ -160,10 +160,10 @@ claude / codex / codebuddy 的流式事件会被解析：`tool_use` / `item.star
 
 ## 本机插件（已升级）
 
-插件 v0.16.0 已通过标准 `dsh plugin` 流程安装：Host 已挂载，浏览器端刷新/重启 DSH 后生效。
+插件 v0.17.0 已通过标准 `dsh plugin` 流程安装：Host 已挂载，浏览器端刷新/重启 DSH 后生效。
 设置入口：**Plugins → AgentLine**（或 Settings → Plugins），可配置 orchestrator 路径、Node、默认仓库，
 以及 DeepSeek / Claude / Codex / Buddy 额度凭据（`role('secret')` 字段，只存本机 profile，不写仓库）。
-源码在本机 `C:\git\dsh-agentline-plugin`；真实环境验收清单见
+源码在本仓库 `plugin/`；真实环境验收清单见
 [docs/02-plugin-upgrade.md](docs/02-plugin-upgrade.md)。
 
 ## 快速开始（调度器）
@@ -244,7 +244,7 @@ node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许�
 
 ## 仓库内容
 
-- [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（v0.3.0：状态/产物、write_scope、模型隔离、运行中输入）；
+- [`AgentLine/SKILL.md`](AgentLine/SKILL.md)：协议正文（v0.4.0：状态/产物、write_scope、模型隔离、运行中输入）；
 - [`AgentLine/templates/`](AgentLine/templates/)：六个交接文件模板（design 含 write_scope 示例）；
 - [`AgentLine/tools/check-skill.ps1`](AgentLine/tools/check-skill.ps1)：skill 只读自检（C1–C9）；
 - [`AgentLine/tools/check-task.ps1`](AgentLine/tools/check-task.ps1)：任务证据链只读校验；

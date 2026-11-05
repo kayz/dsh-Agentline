@@ -1,8 +1,8 @@
 # 02 · 本机 DSH 插件（已升级）
 
-> 状态：已实现 · 版本：plugin 0.16.0 · 源码：`C:\git\dsh-agentline-plugin`
+> 状态：已实现 · 版本：plugin 0.17.0 · 源码：`plugin/`
 > 这是 P3 的真实环境验收方式：不是只看单测，而是从 DSH 驾驶舱发起任务，走完 worktree、队列、输入、CI、评审和合并。
-> 已通过 `dsh plugin --profile desktop remove dsh-agentline` 卸载旧版，再用 `dsh plugin --profile desktop add file:C:\git\dsh-agentline-plugin` 安装新版；Host 已挂载，替换后的浏览器端在刷新/重启 DSH 后生效。
+> 已通过 `dsh plugin --profile desktop remove dsh-agentline` 卸载旧版，再用 `dsh plugin --profile desktop add file:C:\git\dsh-Agentline\plugin` 安装新版；Host 已挂载，替换后的浏览器端在刷新/重启 DSH 后生效。
 
 ## 背景
 

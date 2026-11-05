@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "title": "AgentLine",
+    "description": "多模型协作驾驶舱：worktree 任务、队列、运行中输入与额度用量。"
+  },
+  "settings": {
+    "title": "AgentLine",
+    "description": "运行时路径、默认仓库与额度凭据。"
+  }
+}

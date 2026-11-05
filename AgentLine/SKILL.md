@@ -1,7 +1,7 @@
 ---
 name: AgentLine
 description: 设计→开发→验证三角色协作协议。当任务需要不同 agent 或模型分别设计、实现、验收，并通过 .collab/tasks/<NNN>/ 下的固定文件交接时使用。
-version: 0.3.0
+version: 0.4.0
 ---
 
 # AgentLine

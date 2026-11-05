@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "title": "AgentLine",
+    "description": "Multi-model cockpit: worktree tasks, queue, runtime inputs, and quota usage."
+  },
+  "settings": {
+    "title": "AgentLine",
+    "description": "Runtime paths, default repository, and quota credentials."
+  }
+}
