@@ -155,6 +155,9 @@ export async function printReport({ repo, taskId, dir, state, runs, summary = []
   // 下一步
   push('  下一步')
   if (result && result.ok) {
+    const risk = st.merge_risk
+    if (risk?.tier === 'low') push('     · 低档：有覆盖本任务的预授权时可以  agentline merge --repo <path> --task ' + taskId + ' --grant')
+    else if (risk) push(`     · 需逐个确认：${risk.reasons.join('；')}`)
     push('     · 需要人类许可合并：  agentline merge --repo <path> --task ' + taskId + ' --permission "允许合并"')
     push('     · 合并后可继续：      task 002（未修项）或 P3 控制面')
   } else {

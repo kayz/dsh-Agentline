@@ -88,8 +88,8 @@ Orchestrator 模式下，任务目录还会出现：
 | implemented | + impl.md、run.json |
 | reviewable | + ci-results.json |
 | reviewed | + review*.md、verdict*.json |
-| pr_open | + state.pr.branch（等待人类许可合并） |
-| merged | + state.pr.sha、state.pr.permission |
+| pr_open | + state.pr.branch、state.merge_risk（等待人类许可合并） |
+| merged | + state.pr.sha、state.pr.permission、state.pr.permission_kind（`explicit` / `grant`，后者带 `grant_id`） |
 | blocked | + state.blocked_reason；已有产物保留 |
 
 ### 证据与模型隔离
@@ -112,6 +112,22 @@ write_scope:
 ```
 
 developer 只能修改这些路径；`check-task.ps1` 会用 git diff 校验，越界即失败。`write_scope: []` 表示本任务不改产品代码。
+
+调度器模式下 write_scope 必须声明：design 阶段结束时 design.md 没有 write_scope，调度器会追加一条 note 要求 designer 补写并重跑一次 design；仍然没有则 blocked(`write_scope_missing`)。
+
+### 合并分档
+
+到 `pr_open` 时调度器写入 `state.merge_risk`（`tier`、`reasons`、`metrics`、`limits`），分两档：
+
+| 档位 | 条件 | 合并方式 |
+|---|---|---|
+| low | 评审 ≤ 3 轮；声明了 write_scope 且改动全部落在其中；改动 ≤ 8 个文件且增删 ≤ 3000 行 | 可以用预授权（`merge --grant`） |
+| confirm | 任一条件不满足 | 必须逐个任务给出 `--permission "<用户原话>"` |
+
+- 统计基于 `main...task/<NNN>` 的 diff，任务自己的 `.collab/tasks/<NNN>/` 不计入；阈值可在 `policy.merge.low` 或 `.collab/agentline.json` 的 `merge.low` 覆盖。
+- 预授权把用户的口头授权变成记录：有任务范围、有时限（≤ 168 小时）、带用户原话，可撤销，存放在 `<repo>/.git/agentline/grants.json`。
+- `merge --check` 只评估不合并；`--grant` 与 `--permission` 只能二选一；confirm 档拒绝 `--grant`。
+- 预授权防的是临场批量放行，不防伪造：CLI 无法验证调用者是不是人，所以 agent 只能在用户明确说出授权时创建 grant，并把原话写进 `--text`。
 
 ## 流程
 
@@ -145,7 +161,7 @@ designer 认为需求存在致命歧义时，写 `<task>/attention.json`（quest
 5. 交接文件名全部小写、固定；修改时覆盖原文件，历史版本靠 git 保留；run.log 只能追加。
 6. 调度器模式下 state.json 的 status 只能由调度器或明确授权的阶段推进；手工改 status 视为伪造证据。
 7. `write_scope` 只允许缩小，不允许在开发阶段扩大；需要扩大时退回 designer 修改 design.md 并重新验收。
-8. 合并永远需要人类许可；agent 只把分支准备到 pr_open，不自我放行。
+8. 合并永远需要人类许可；agent 只把分支准备到 pr_open，不自我放行。低档任务的许可可以来自用户事先给出的预授权（有范围、有时限），confirm 档必须逐个确认。
 
 ## 自检
 

@@ -20,9 +20,11 @@ import { ensureTaskBranch, commitAll, changedFiles, headSha } from './git.mjs'
 import { buildSummary } from './summary.mjs'
 import { writeNotice, printReport } from './report.mjs'
 import { effectiveRole } from './routing.mjs'
-import { pendingInputs, readAttention, removeAttention } from './inputs.mjs'
+import { appendInput, pendingInputs, readAttention, removeAttention } from './inputs.mjs'
+import { evaluateMerge, describeTier } from './merge-policy.mjs'
 
 const STOPPED = 'halted_by_user'
+const WRITE_SCOPE_NOTE = 'design.md 缺少 write_scope。请只在 design.md 最顶部补一段 YAML front matter：第一行 ---，接着 write_scope:，下面每行 "  - 路径或 glob"（相对仓库根，* 单段、** 多段），最后一行 ---。列出 developer 允许修改的全部路径；不改产品代码就写 write_scope: []。design.md 其余内容和 acceptance.md 保持不变。'
 
 function setStatusAt(taskDir, taskId, status, by, extra = {}) {
   const st = readState(taskDir) || { id: taskId, history: [] }
@@ -296,6 +298,15 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     const r = await runRole({ config, repo: runRepo, taskId, role: 'design', round: 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
     if (!r.ok) return finish({ ok: false, reason: r.state.blocked_reason })
     await commitAll(runRepo, `stage(design): task ${taskId}`)
+    // write_scope 是并发排队和合并分档的依据：缺失时让 designer 补写一次，仍缺则停下
+    if (scopeNow() === null) {
+      log('[design] design.md 未声明 write_scope → 请 designer 补写')
+      appendInput(runDir, { kind: 'note', by: 'agentline', text: WRITE_SCOPE_NOTE })
+      const r2 = await runRole({ config, repo: runRepo, taskId, role: 'design', round: 2, candidateOverride: eff.order, effortOverride: eff.effort, log })
+      if (!r2.ok) return finish({ ok: false, reason: r2.state.blocked_reason })
+      await commitAll(runRepo, `stage(design): declare write_scope (task ${taskId})`)
+      if (scopeNow() === null) return finish({ ok: false, reason: 'write_scope_missing' })
+    }
     summary.push({ stage: 'design', model: r.model, ok: true })
     if (stopIfRequested('design')) return finish({ ok: false, reason: STOPPED })
     if (attentionBlock('design')) return finish({ ok: false, reason: 'awaiting_human' })
@@ -380,9 +391,15 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
   if (midAmendment('pr_open')) return finish({ ok: false, reason: 'amendment_pending' })
 
   const files = await changedFiles(runRepo, 'main')
+  let mergeRisk = null
+  try {
+    mergeRisk = await evaluateMerge({ repo: runRepo, taskDir: runDir, taskId, head: 'HEAD', config, projectCfg })
+    log(`[merge] ${describeTier(mergeRisk)}`)
+  } catch (e) { log(`[merge] 分档失败，按需逐个确认处理：${e.message}`) }
   setStatus('pr_open', 'agentline', {
     pr: { branch: branchName, state: 'open', files, sha: await headSha(runRepo) },
     merge_gate: { requires_human_permission: true, on_no_permission: 'stay_in_pr' },
+    merge_risk: mergeRisk,
   })
   await commitAll(runRepo, `chore(${taskId}): pr_open state`)
   return finish({ ok: true, branch: branchName, files })
