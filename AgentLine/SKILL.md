@@ -15,6 +15,14 @@ version: 0.4.0
 
 单人小改动、无需独立验收的任务通常不需要本协议。本 skill 约定人工或 agent 的交接行为；调度器（`orchestrator/`）是可选实现，负责建分支、派活、CI、评审与交班。
 
+## 上游三阶段（可选）
+
+AgentLine 核心只负责 **Build**：一个任务的 design → develop → verify。
+在它之前可以有可选的 **Studio**（多模型讨论/立项）和 **Blueprint**（系统设计、任务图、测试架构）两个控制面阶段。三阶段的角色、闸门、测试设计时机和模型隔离见
+[`docs/03-three-stage-pipeline.md`](../docs/03-three-stage-pipeline.md)。
+
+该文档是协议层扩展，调度器尚未内置 `blueprint` 命令；不要把它写成已经实现的能力。
+
 ## 角色
 
 ### designer（设计）

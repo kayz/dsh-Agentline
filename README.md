@@ -251,7 +251,8 @@ node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许�
 - [`orchestrator/`](orchestrator/)：调度器内核（`agentline.mjs` + `lib/` + `config/` + `test/`）；
 - [`SCOPE.md`](SCOPE.md)：边界：负责什么、不负责什么、怎样与其他工具配合；
 - [`docs/01-positioning-and-roadmap.md`](docs/01-positioning-and-roadmap.md)：定位与路线（与 DSH Super-agent 的关系）；
-- [`docs/02-plugin-upgrade.md`](docs/02-plugin-upgrade.md)：本机 DSH 插件接入新内核的后续任务与验收清单。
+- [`docs/02-plugin-upgrade.md`](docs/02-plugin-upgrade.md)：本机 DSH 插件接入新内核的后续任务与验收清单；
+- [`docs/03-three-stage-pipeline.md`](docs/03-three-stage-pipeline.md)：Studio / Blueprint / Build 三阶段协议（控制面扩展，内核尚未实现 blueprint 命令）。
 
 ## 测试
 

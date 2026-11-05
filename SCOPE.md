@@ -49,6 +49,10 @@ AgentLine 只管**一个任务**：在任意 git 仓库里，让不同模型分�
 - **控制面**：将来如果接入 DSH Super-agent 这类控制面，适配层做成独立的可选包，把对方的任务分派
   转换成 `brief.md` 和一次 `flow` 调用，把任务状态回传给对方。内核不为某个控制面改动。
   Super-agent 目前只有研究原型，接口只作参照，不作依赖。
+- **Studio / Blueprint（可选上游）**：多模型讨论、系统设计和测试架构属于控制面，不属于内核。
+  AgentLine 只接收 Blueprint 产出的任务图和 `brief.md`，仍然按单任务执行。三阶段协议见
+  [`docs/03-three-stage-pipeline.md`](docs/03-three-stage-pipeline.md)；在 `blueprint` 命令实现前，
+  这些阶段由调用方手动完成，不声称内核已支持。
 - **项目检查**：目标仓库已有检查脚本时，由 designer 把它写成一条验收命令。以后如果要做成配置项，
   也只做一个通用的“项目检查命令”，不识别具体模板。
 
