@@ -371,6 +371,7 @@ async function cmdBuild() {
     const r = await runStep({
       config, repo: located?.repo || repo, taskId, step: args.step || null,
       runnerPath: runnerPath(), log, projectCfg,
+      adapterFactory: (provider) => getAdapter(provider),
     })
     const out = { task: taskId, ...r }
     if (args.json) log(JSON.stringify(out, null, 2))
@@ -381,6 +382,7 @@ async function cmdBuild() {
     const r = await runBuild({
       config, repo: located?.repo || repo, taskId, runnerPath: runnerPath(), log,
       projectCfg, maxSteps: Number(args['max-steps'] || 10),
+      adapterFactory: (provider) => getAdapter(provider),
     })
     if (args.json) log(JSON.stringify({ task: taskId, ...r }, null, 2))
     else log(`${r.ok ? 'DONE' : 'BLOCKED'} status=${r.status} next=${r.next}${r.reason ? ' reason=' + r.reason : ''}`)

@@ -200,7 +200,18 @@ async function readTaskDetail(project, taskId, tail = 160, render = false) {
       .map((line) => { try { return JSON.parse(line) } catch { return null } })
       .filter(Boolean)
   } catch { /* no K1 ledger */ }
-  return { project, task: taskId, dir, worktree: located.worktree, state, runs, logs, render, attention, stepLedger }
+  let build = null
+  try {
+    const buildMod = await importFresh(path.join(agentlineHome(), 'lib', 'build.mjs'))
+    build = buildMod.readBuildTask(project, taskId)
+  } catch (e) {
+    build = {
+      id: String(taskId), state: 'error', error: e && e.message ? e.message : String(e),
+      source: null, test_levels: null, status: null, model: null,
+      business_rounds: null, infra_retries: null, gate: null,
+    }
+  }
+  return { project, task: taskId, dir, worktree: located.worktree, state, runs, logs, render, attention, stepLedger, build }
 }
 
 // ───────────────────────────── 用量 ─────────────────────────────

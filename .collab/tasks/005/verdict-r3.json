@@ -1,0 +1,46 @@
+{
+    "verdict":  "pass",
+    "git_sha":  "b6b5620c46c7f59f7e53ac108a830902d6c882c9",
+    "passed":  7,
+    "total":  7,
+    "findings":  [
+
+                 ],
+    "results":  [
+                    {
+                        "evidence":  "ci-results.json AC-1 exitCode 0，末行 AC-1 OK",
+                        "pass":  true,
+                        "id":  "AC-1"
+                    },
+                    {
+                        "evidence":  "CI AC-2 6 通过、0 失败；orchestrator/lib/step.mjs:107-115；orchestrator/lib/build.mjs:327-391；orchestrator/test/build-source.test.mjs:200,221,279,335,423,459",
+                        "pass":  true,
+                        "id":  "AC-2"
+                    },
+                    {
+                        "evidence":  "CI AC-3 6 通过、0 失败；orchestrator/lib/step.mjs:70-73；orchestrator/test/build-execution.test.mjs:77,93,136,182,374-409",
+                        "pass":  true,
+                        "id":  "AC-3"
+                    },
+                    {
+                        "evidence":  "CI AC-4 7 通过、0 失败；orchestrator/lib/build.mjs:610-647,689-729；orchestrator/test/build-gate.test.mjs:64,111,191,217,249,303,341",
+                        "pass":  true,
+                        "id":  "AC-4"
+                    },
+                    {
+                        "evidence":  "CI AC-5 4 通过、0 失败；orchestrator/lib/step.mjs:70-98,127-157；orchestrator/lib/build.mjs:842-870；orchestrator/test/build-roles.test.mjs:63,102,128,219；orchestrator/test/build-execution.test.mjs:374-409",
+                        "pass":  true,
+                        "id":  "AC-5"
+                    },
+                    {
+                        "evidence":  "CI AC-6 7 通过、0 失败；orchestrator/lib/build.mjs:960-1053；plugin/test/build-ui.test.mjs:487,507,623,633,768,828",
+                        "pass":  true,
+                        "id":  "AC-6"
+                    },
+                    {
+                        "evidence":  "CI AC-7 exitCode 0，orchestrator 187 项、插件 24 项通过，末行 AC-7 OK",
+                        "pass":  true,
+                        "id":  "AC-7"
+                    }
+                ]
+}

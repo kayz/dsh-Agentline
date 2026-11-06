@@ -25,6 +25,14 @@ const FLOW_NOISE = [
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 const HEALTH_RANK = { green: 0, unknown: 1, yellow: 2, red: 3 }
 
+function rememberUnknownSideEffects(dir, st) {
+  st.side_effects = 'unknown'
+  try {
+    const disk = readState(dir) || st
+    writeState(dir, { ...disk, side_effects: 'unknown' })
+  } catch { /* 结束时的 blocked 状态仍会带上 st.side_effects */ }
+}
+
 function livePath(dir) { return path.join(dir, 'live.json') }
 function writeLive(dir, payload) {
   try {
@@ -94,7 +102,7 @@ function artifactFresh(dir, role, round, sinceMs) {
  */
 export async function executeRole({
   config, repo, taskId, role, round = 1, modelOverride, candidateOverride, effortOverride, log,
-  adapterFactory, health = null,
+  adapterFactory, health = null, observeIdentity = false,
 }) {
   const spec = ROLE_SPECS[role]
   const dir = path.join(repo, config.collabDir, taskId)
@@ -144,20 +152,31 @@ export async function executeRole({
     })
 
     let res = null
+    let unknownSide = false
     for (let net = 0; net <= netRetries; net++) {
       res = await adapter.run({
         prompt, cwd: repo, model: model.id, effort,
         timeoutMs: (provider.limits?.timeoutMinutes || 60) * 60_000, logPath,
       })
+      // 未知副作用不能在同一步里重试。标记先落盘，再决定要不要下一次物理调用。
+      if (res && res.side_effects === 'unknown') {
+        unknownSide = true
+        rememberUnknownSideEffects(dir, st)
+        break
+      }
       if ((res.exitCode === 0 && !res.error) || !isTransientError(res.error)) break
       if (net < netRetries) log?.(`[${role} r${round}] ${model.key} 网络中断，原模型重试 ${net + 1}/${netRetries}: ${res.error}`)
     }
     clearLive(dir)
     const endedAt = new Date()
 
+    const observed = typeof res.modelResolved === 'string' && res.modelResolved.trim() ? res.modelResolved.trim() : ''
     const record = {
       task: taskId, role, round, candidate: idx + 1, backend: provider.adapter,
-      model_requested: model.id, model_resolved: res.modelResolved || model.id,
+      model_requested: model.id,
+      // Build 步骤要求真实身份。flow 仍保持原来的回退，避免改变旧语义。
+      model_resolved: observeIdentity ? (observed || null) : (res.modelResolved || model.id),
+      ...(observeIdentity ? { model_resolved_source: observed ? 'adapter' : 'none' } : {}),
       provider: model.provider,
       effort, started_at: startedAt.toISOString(), ended_at: endedAt.toISOString(),
       duration_ms: endedAt - startedAt, exit: { code: res.exitCode },
@@ -186,6 +205,15 @@ export async function executeRole({
     }
     record.error = res.error || null
     if (handoff) record.inherited_from = { candidate: handoff.fromIndex, model: handoff.model, file: handoff.file }
+
+    if (unknownSide || (res && res.side_effects === 'unknown')) {
+      ok = false
+      lastError = res.error || 'side_effects_unknown'
+      record.error = lastError
+      rememberUnknownSideEffects(dir, st)
+      appendRun(dir, record)
+      break
+    }
 
     if (ok) {
       const nextState = {

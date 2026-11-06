@@ -1,0 +1,22 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "1b31e79181d4e21388abba2a74a57f0a67319e3e",
+  "passed": 5,
+  "total": 7,
+  "findings": [
+    {
+      "severity": "P1",
+      "description": "真实 CLI 未传 adapterFactory，runStep 包装器以返回 null 的函数代替默认 adapter，导致模型步骤无法执行，完整运行无法到达 pr_open。",
+      "evidence": "orchestrator/agentline.mjs:371-383；orchestrator/lib/step.mjs:69-71,156；orchestrator/lib/exec.mjs:118,141；orchestrator/test/build-execution.test.mjs:82,98"
+    }
+  ],
+  "results": [
+    {"id":"AC-1","pass":true,"evidence":"ci-results.json AC-1 exitCode 0，末行 AC-1 OK"},
+    {"id":"AC-2","pass":true,"evidence":"ci-results.json AC-2 exitCode 0；orchestrator/lib/step.mjs:108-115；orchestrator/test/build-source.test.mjs:200,221,279,335,423,459"},
+    {"id":"AC-3","pass":false,"evidence":"ci-results.json AC-3 exitCode 0；orchestrator/agentline.mjs:371-383 与 orchestrator/lib/step.mjs:69-71,156 显示真实 CLI 无默认 adapter；orchestrator/test/build-execution.test.mjs:98 注入测试 adapter"},
+    {"id":"AC-4","pass":true,"evidence":"ci-results.json AC-4 exitCode 0；orchestrator/lib/build.mjs:610,681,699,724,812；orchestrator/test/build-gate.test.mjs:64,111,191,249,341"},
+    {"id":"AC-5","pass":false,"evidence":"ci-results.json AC-5 exitCode 0；orchestrator/lib/step.mjs:69-97,156；真实 CLI 缺省 adapter 路径无法进行物理调用"},
+    {"id":"AC-6","pass":true,"evidence":"ci-results.json AC-6 exitCode 0；plugin/test/build-ui.test.mjs:487,507,633,768,828；orchestrator/lib/build.mjs:981-986"},
+    {"id":"AC-7","pass":true,"evidence":"ci-results.json AC-7 exitCode 0，orchestrator 185 项、插件 24 项通过，末行 AC-7 OK"}
+  ]
+}

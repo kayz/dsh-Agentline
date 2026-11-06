@@ -1,0 +1,20 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "4f4408e3fb8b19c1ac8339cad73a9ee686c27b02",
+  "passed": 5,
+  "total": 7,
+  "findings": [
+    {"severity":"P1","description":"CI 结果的 passed 与 exitCode 或末行矛盾时仍可通过，无法证明命令通过。","evidence":"orchestrator/lib/build.mjs:403-426"},
+    {"severity":"P1","description":"评审 SHA 是当前 HEAD 的祖先即可通过，后续代码变更不会使旧评审失效。","evidence":"orchestrator/lib/build.mjs:472-508"},
+    {"severity":"P1","description":"损坏的物理调用记录被静默丢弃，其余调用可使隔离检查通过。","evidence":"orchestrator/lib/build.mjs:300-313,326-339,535-560"}
+  ],
+  "results": [
+    {"id":"AC-1","pass":true,"evidence":"ci-results.json AC-1：exitCode 0，AC-1 OK"},
+    {"id":"AC-2","pass":true,"evidence":"ci-results.json AC-2：exitCode 0，3 项通过；orchestrator/lib/build.mjs:183-241；orchestrator/test/build-source.test.mjs"},
+    {"id":"AC-3","pass":true,"evidence":"ci-results.json AC-3：exitCode 0，4 项通过；orchestrator/lib/step.mjs:103-118,175-252；orchestrator/lib/exec.mjs:162,209-211"},
+    {"id":"AC-4","pass":false,"evidence":"ci-results.json AC-4：exitCode 0，4 项通过；orchestrator/lib/build.mjs:403-426,472-508 存在证据一致性和新鲜度缺口"},
+    {"id":"AC-5","pass":false,"evidence":"ci-results.json AC-5：exitCode 0；orchestrator/lib/build.mjs:300-313,326-339,535-560 忽略损坏的调用记录"},
+    {"id":"AC-6","pass":true,"evidence":"ci-results.json AC-6：exitCode 0；plugin/test/build-ui.test.mjs；orchestrator/lib/build.mjs:651-718"},
+    {"id":"AC-7","pass":true,"evidence":"ci-results.json AC-7：exitCode 0，orchestrator 179 项和插件 20 项通过，AC-7 OK"}
+  ]
+}
