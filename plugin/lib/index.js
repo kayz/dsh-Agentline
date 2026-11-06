@@ -862,6 +862,80 @@ export function apply(ctx, config) {
         } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }) }
       })
 
+      // 只读：Studio 控制面。读取走 lib/studio.mjs；写操作每次只转发一条公开 CLI（参数数组，不经 shell）
+      route('/agentline/studio', 'agentline: studio', async (req, res) => {
+        try {
+          const u = new URL(req.url || '/', 'http://localhost')
+          const queryProject = resolveProject(u.searchParams.get('project'))
+          const studioMod = await importFresh(path.join(agentlineHome(), 'lib', 'studio.mjs'))
+
+          if (req.method === 'POST') {
+            const body = await readBody(req)
+            const action = String((body && body.action) || '')
+            const id = String((body && body.id) || '')
+            const project = resolveProject((body && body.project) || u.searchParams.get('project'))
+            if (!project) return sendJson(res, { ok: false, error: 'missing project' }, 400)
+            if (!['new', 'run', 'answer', 'conclude'].includes(action)) return sendJson(res, { ok: false, error: 'unknown studio action' }, 400)
+            if (!studioMod.isValidSessionId(id)) return sendJson(res, { ok: false, error: 'invalid studio session id' }, 400)
+
+            const argv = [agentlineCli(), 'studio', action, '--repo', project, '--id', id]
+            if (action === 'new') {
+              const title = String((body && body.title) || '').trim()
+              const input = String((body && body.input) || '').trim()
+              if (!input) return sendJson(res, { ok: false, error: 'new requires input' }, 400)
+              if (title) argv.push('--title', title)
+              argv.push('--input', input)
+            }
+            if (action === 'answer') {
+              const question = String((body && body.question) || '').trim()
+              const decision = String((body && body.decision) || '').trim()
+              const text = String((body && body.text) || '').trim()
+              const adoptDefault = !!(body && body.default === true)
+              if (!!question === !!decision) return sendJson(res, { ok: false, error: 'answer requires exactly one of question|decision' }, 400)
+              if (adoptDefault && text) return sendJson(res, { ok: false, error: 'text and default are mutually exclusive' }, 400)
+              if (!adoptDefault && !text) return sendJson(res, { ok: false, error: 'answer requires text or default' }, 400)
+              if (question) argv.push('--question', question)
+              if (decision) argv.push('--decision', decision)
+              if (text) argv.push('--text', text)
+              argv.push('--channel', 'ui')
+              if (adoptDefault) argv.push('--default')
+            }
+
+            const child = spawn(nodeBin(), argv, { cwd: agentlineHome(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+            let out = ''
+            child.stdout.on('data', (d) => { out += d.toString() })
+            child.stderr.on('data', (d) => { out += d.toString() })
+            const code = await new Promise((resolve) => {
+              const timer = setTimeout(() => { try { child.kill() } catch { /* ignore */ } resolve(124) }, 600_000)
+              child.on('close', (c) => { clearTimeout(timer); resolve(c ?? -1) })
+            })
+            logPlugin(`studio ${action} ${project}#${id} -> code=${code}`)
+            return sendJson(res, { ok: code === 0, code, output: out.slice(-4000) })
+          }
+
+          if (req.method && req.method !== 'GET') return sendJson(res, { ok: false, error: 'GET or POST only' }, 405)
+          if (!queryProject) return sendJson(res, { ok: false, error: 'missing project' }, 400)
+          const id = u.searchParams.get('id')
+          if (id && !studioMod.isValidSessionId(id)) {
+            return sendJson(res, { ok: false, error: 'invalid studio session id' }, 400)
+          }
+          const cfgMod = await importFresh(path.join(agentlineHome(), 'lib', 'config.mjs'))
+          const loaded = cfgMod.loadConfig({ orchestratorRoot: agentlineHome(), repo: queryProject })
+          const roles = studioMod.readStudioRoles(loaded.config, readJsonFile(path.join(queryProject, '.collab', 'agentline.json')) || {})
+          if (!id) {
+            return sendJson(res, { ok: true, project: queryProject, sessions: studioMod.listSessions(queryProject), roles })
+          }
+          const detail = studioMod.readStudio(queryProject, id)
+          if (detail.state !== 'ok') {
+            return sendJson(res, {
+              ok: false, state: detail.state, project: queryProject, id,
+              error: (detail.errors || []).join('; ') || `studio session ${id} is ${detail.state}`,
+            })
+          }
+          sendJson(res, { ok: true, project: queryProject, id, ...detail, g0: studioMod.evaluateG0(queryProject, id), roles })
+        } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }, 500) }
+      })
+
       // 只读：模型目录与 Provider 发现缓存（转发 orchestrator 的 config + model-catalog，不写盘）
       route('/agentline/catalog', 'agentline: catalog', async (req, res) => {
         try {
