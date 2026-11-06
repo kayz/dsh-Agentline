@@ -1,46 +1,52 @@
 # Blueprint 20261106 — AgentLine 插件状态
 
-状态：**契约修补 v6 完成；Review v6 = REVISE；仅剩 S1 范围裁决 + POSIX 判空收口**
+状态：**契约修补 v7 完成；v8 未生成正式 contract，等待用户选择**
 日期：2026-11-06
 
 ## 已完成
 
-- `design-v1.md` / `review-v1.md`：完整设计 v1。
-- `design-v2-delta.md` / `review-v2.md`：第 2 轮。
-- `design-v3-delta.md` / `review-v3.md`：第 3 轮。
-- `design-v4-contract.md` / `review-v4.md`：D1–D4 后契约收口。
-- `design-v5-contract.md` / `review-v5.md`：输入账本、K 恢复、T 缓存、drain、D3。
-- `design-v6-contract.md` / `review-v6.md`：系统 note、晚到归档、POSIX 终止证明、旧 cmdRun 后代。
-- `mockups/index.html`：含多项目/多任务的静态 UI mockup。
+- `design-v1.md` / `review-v1.md`。
+- `design-v2-delta.md` / `review-v2.md`。
+- `design-v3-delta.md` / `review-v3.md`。
+- `design-v4-contract.md` / `review-v4.md`。
+- `design-v5-contract.md` / `review-v5.md`。
+- `design-v6-contract.md` / `review-v6.md`。
+- `design-v7-contract.md` / `review-v7.md`。
+- `mockups/index.html`：含多项目/多任务的 UI mockup。
 
-## Review v6 结论
+## Review v7 结果
 
 已关闭：
 
-- B1-1 系统 note 的确定性 ID、P1b 持久化、P2 去重、W0 恢复；
-- B1-2 晚到归档：主/late 独立目录与 ref，W1b-L 唯一结果；
-- C_auth 包含 initial adopt；
-- B4 K 恢复、T 缓存、D3 保持关闭；
-- M4 入口退出后的记录保留、来源 g/h/i 已补计数对象。
+- S1-1=A / S1-2=A；
+- W7a/W16 和保证范围披露；
+- reserved ID 优先级；
+- B6-1 范围裁决；
+- 系统 note、晚到归档、K 恢复、T 缓存、D3 保持关闭。
 
 仍剩：
 
-1. **S1 用户范围裁决**：运行期间的 L-foreign 输入兼容，以及“从未观测、无残留证据的旧执行者”是否排除出 drain 保证。
-2. **B6-2 POSIX 判空条件**：`Cand = ∅ → proven_dead` 需要进程枚举完整性前提；`hidepid`、权限可见性变化、枚举期间进程创建/退出都会使“扫描无报错”不等于完整快照。无法建立完整性时必须返回 `unknown`。
-3. 实现前契约整理（Minor）：L-cur 锁接入、reserved ID 优先级、清零验收夹具、合并稿清理。
+1. **B7-1**：`hidepid=4` 时组成员身份不能证明完整可见性，可能错误判空。
+2. **B7-2**：`proc_start` 的 tick 与绝对开机时间混用，第三层可能错误放行同一 boot。
+3. **B7-3**：损坏输入锁被直接删除，可能绕过互斥。
+4. Minor：清零夹具候选范围、L-cur 边界、状态表时机、合并稿。
 
-## 需要用户裁决（仅 S1，两项）
+## v8 的情况
 
-### S1-1 输入兼容
+已启动 v8 局部修补，但 Claude 返回的是一份摘要，**没有写出正式的 contract 正文**；因此没有运行 review-v8，不能把 v8 当作已完成。
 
-- **A（推荐）**：接受运行期间不支持 L-foreign 输入；新版输入命令与 runStep 通过输入锁互斥；不修改 `inputs.mjs` 的 append-only 格式。
-- B：追加授权修改 `inputs.mjs` 为 append-only 状态事件，同时保留回滚格式转换。仍不能覆盖无证据的旧外部写入者。
+## 新的用户裁决 U-W1
 
-### S1-2 旧执行者保证
+Windows 进程创建时间使用墙钟。系统时钟回拨时，第二层可能漏掉后代：
 
-- **A（推荐）**：接受把“从未被观测、且没有残留证据的旧 L-foreign 执行者”排除出 drain 保证；可证明的旧执行者仍保持非零/unknown，直到终止证明。
-- B：不接受排除；需要额外机制才能覆盖无证据旧执行者（范围更大，需单独立项）。
+- A（推荐）：把“运行期间系统时钟不被回拨”作为明确信任边界；检测到持续时钟跳变时返回 `unknown`。
+- B：Windows 第二层始终 `unknown`，无守护时恢复一律要求重启。
 
-## 当前结论
+## 当前判断
 
-B6-2 是正确性收口，不能通过人工批准跳过。S1 裁决后，只需一次局部收口（POSIX 判空 + Minor 合并稿），即可尝试进入实现切分。
+剩余问题已经从架构问题收敛为平台/进程边界的正确性细节。继续无限补契约的收益在下降；建议二选一：
+
+1. 完成一次**最终 v8 正式 contract**（只修 B7-1/2/3 + U-W1），然后复核；
+2. 冻结现有 v7 契约，把 B7 边界作为实现期测试/平台限制，不再继续模型回合。
+
+在用户决定前，不进入实现切分，也不把 v7 当作已批准。

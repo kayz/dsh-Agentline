@@ -104,6 +104,17 @@
 - 审批记录必须包含 channel、调用者、原文、时间和内容哈希；
 - 任何自动化代理仍不得替用户批准。
 
+## S1：旧输入与旧执行者范围
+
+**决定：S1-1=A，S1-2=A。**
+
+- 运行期间不支持 L-foreign 外部 CLI 并发写输入；
+- 新版输入命令和 runStep 通过输入锁互斥；
+- 不修改 `inputs.mjs` 的 append-only 格式；
+- 可证明的旧执行者仍保持非零/`unknown`，直到终止证明；
+- “从未被观测、且没有残留证据的旧 L-foreign 执行者”排除出 drain 保证；
+- 该排除必须在文档中明确写出，不能默认为“没有运行”。
+
 ## 后续
 
 1. 写 `docs/blueprint/20261106-agentline-plugin/` 的 Blueprint brief；
