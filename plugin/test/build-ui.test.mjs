@@ -160,6 +160,11 @@ function findById(root, id) {
   walk(root.tree, (n) => { if (!hit && n.props && n.props['data-testid'] === id) hit = n })
   return hit
 }
+function findByTitle(root, title) {
+  let hit = null
+  walk(root.tree, (n) => { if (!hit && n.props && n.props.title === title) hit = n })
+  return hit
+}
 function textOf(node) {
   if (!node) return ''
   if (node.text !== undefined) return node.text
@@ -758,5 +763,96 @@ test.describe('build ui', { concurrency: 1 }, () => {
     await settle(root)
     assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
     assert.equal(findById(root, 'build-source'), null)
+  })
+
+  test('uncommitted product edits show stale CI and verdict; collab-only edits stay passing', async (t) => {
+    const home = makeHome()
+    const project = makeProject('dirty')
+    t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(project, { recursive: true, force: true }) })
+    const git = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+    git(['init', '-q', '-b', 'main'])
+    git(['config', 'user.email', 'test@example.com'])
+    git(['config', 'user.name', 'Test'])
+    fs.writeFileSync(path.join(project, 'README.md'), '# repo\n', 'utf8')
+    git(['add', 'README.md'])
+    git(['commit', '-qm', 'init'])
+    const head = git(['rev-parse', 'HEAD']).trim()
+    const task = path.join(project, '.collab', 'tasks', '001')
+    fs.mkdirSync(task, { recursive: true })
+    writeJson(path.join(task, 'state.json'), { id: '001', status: 'reviewable', history: [] })
+    fs.writeFileSync(path.join(task, 'acceptance.md'), ['AC-1', 'AC-2'].map((id) => [
+      `## ${id} ${id}`,
+      '',
+      '```pwsh',
+      `Write-Output '${id} OK'`,
+      '```',
+      '',
+      `期望：${id} OK`,
+      '',
+    ].join('\n')).join('\n'), 'utf8')
+    writeJson(path.join(task, 'ci-results.json'), {
+      ranAt: new Date(Date.now() + 60_000).toISOString(),
+      passed: 2,
+      total: 2,
+      ok: true,
+      results: [
+        { id: 'AC-1', passed: true, exitCode: 0, lastLine: 'AC-1 OK' },
+        { id: 'AC-2', passed: true, exitCode: 0, lastLine: 'AC-2 OK' },
+      ],
+    })
+    writeJson(path.join(task, 'verdict.json'), { verdict: 'pass', git_sha: head })
+    fs.writeFileSync(path.join(task, 'audit-note.txt'), 'audit\n', 'utf8')
+    const forward = await boot(home, project)
+    installFetch(makeServer({
+      ...forward,
+      projects: projectsOf([{ title: 'dirty', path: project, enabled: true, tasks: { total: 1, active: 1, last: 'reviewable' } }], project),
+    }))
+    const root = await mountCockpit()
+    await settle(root)
+    click(root, findById(root, 'tab-build'))
+    await settle(root)
+    click(root, findById(root, 'build-item-001'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-check-T.ci_all_pass'), /通过/)
+    assert.match(textOfId(root, 'build-check-T.verdict_pass'), /通过/)
+    fs.writeFileSync(path.join(project, 'README.md'), '# changed\n', 'utf8')
+    click(root, findByTitle(root, '刷新：重新读取当前页数据'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-check-T.ci_all_pass'), /过期/)
+    assert.doesNotMatch(textOfId(root, 'build-check-T.ci_all_pass'), /通过/)
+    assert.match(textOfId(root, 'build-check-T.verdict_pass'), /过期/)
+    assert.doesNotMatch(textOfId(root, 'build-check-T.verdict_pass'), /通过/)
+    assert.match(textOfId(root, 'build-gate'), /不通过/)
+  })
+
+  test('state.json that is json but not an object is an error', async (t) => {
+    const home = makeHome()
+    const project = makeProject('badjson')
+    t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(project, { recursive: true, force: true }) })
+    const bodies = { '001': '[]', '002': 'null', '003': '"designed"' }
+    for (const [id, body] of Object.entries(bodies)) {
+      const dir = path.join(project, '.collab', 'tasks', id)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'state.json'), body, 'utf8')
+    }
+    const forward = await boot(home, project)
+    installFetch(makeServer({
+      ...forward,
+      projects: projectsOf([{ title: 'badjson', path: project, enabled: true, tasks: { total: 3, active: 0, last: null } }], project),
+    }))
+    const root = await mountCockpit()
+    await settle(root)
+    click(root, findById(root, 'tab-build'))
+    await settle(root)
+    for (const id of Object.keys(bodies)) {
+      assert.match(textOfId(root, 'build-row-' + id), /错误/)
+      assert.doesNotMatch(textOfId(root, 'build-row-' + id), /旧任务/)
+      click(root, findById(root, 'build-item-' + id))
+      await settle(root)
+      assert.match(textOfId(root, 'build-task-error'), /state\.json 损坏/)
+      assert.equal(findById(root, 'build-status'), null)
+      assert.equal(findById(root, 'build-source'), null)
+      assert.doesNotMatch(textOfId(root, 'build-facts'), /状态：未知/)
+    }
   })
 })

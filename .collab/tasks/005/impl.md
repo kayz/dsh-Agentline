@@ -145,3 +145,22 @@ T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pa
 | AC-5 `node --test orchestrator/test/build-roles.test.mjs` | 4 通过 |
 | AC-6 `node --test plugin/test/build-ui.test.mjs` | 5 通过。工作树记录损坏、来源缺失、main 工作区仍列着该任务时，Build 行显示错误，详情是来源损坏，不显示旧任务 |
 | AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 184 通过；插件 22 通过 |
+
+## 未提交的产品改动与损坏状态
+
+评审指出两处投影和证据仍会放行，这次只补这两处。
+
+- `T.ci_all_pass` 和 `T.verdict_pass` 在提交比较之外，还看工作区里还没提交的产品文件。已跟踪文件的未暂存改动、已暂存但未提交的改动、以及未忽略的新文件，都会让这两项记为 `stale` 且不通过。只改 `.collab` 里的审计文件，两项仍可以通过。工作区状态读不出来时不能当成干净：CI 是 `unknown:undetermined`，评审是 `unknown:git_sha`。
+- `state.json` 存在且能解析，但值不是对象（`[]`、`null`、字符串）时，`readBuildTask` 返回错误「state.json 损坏」。解析失败仍是「state.json 无法读取」。文件不存在时仍是正常任务、状态未知。来源已经损坏时仍优先显示「来源损坏」。
+
+这一轮自测：
+
+| 验收 | 结果 |
+|---|---|
+| AC-1 `node --check` 三个入口 | 退出码 0，输出 `AC-1 OK` |
+| AC-2 `node --test orchestrator/test/build-source.test.mjs` | 6 通过 |
+| AC-3 `node --test orchestrator/test/build-execution.test.mjs` | 4 通过，`runBuild` 到 `pr_open` 后四项 T gate 仍通过 |
+| AC-4 `node --test orchestrator/test/build-gate.test.mjs` | 7 通过。未提交的 README 改动、未跟踪的 `src.txt`、以及只存在于暂存区的产品改动，都让 CI 和评审变为 `stale` 且总 gate 不通过；只留下 `.collab` 审计文件时两项仍通过 |
+| AC-5 `node --test orchestrator/test/build-roles.test.mjs` | 4 通过 |
+| AC-6 `node --test plugin/test/build-ui.test.mjs` | 7 通过。未提交产品改动后刷新，CI 和评审显示过期；`[]`、`null`、字符串三种 `state.json` 显示「state.json 损坏」，不显示未知状态 |
+| AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 185 通过；插件 24 通过 |

@@ -663,6 +663,29 @@ function productCommitMs(repo) {
   }
 }
 
+function gitPaths(repo, args) {
+  const out = gitText(repo, args)
+  if (out == null) return null
+  return out.split('\0').map((name) => name.trim()).filter(Boolean)
+}
+
+function isProductPath(name) {
+  const file = name.replaceAll('\\', '/')
+  return file !== '.collab' && !file.startsWith('.collab/')
+}
+
+/**
+ * 工作区里还没提交的产品文件。已暂存、未暂存和未跟踪都算。
+ * 只改 .collab 不算。读不出来返回 null，不能当成干净。
+ */
+function uncommittedProduct(repo) {
+  const tracked = gitPaths(repo, ['diff', '-z', '--name-only', 'HEAD', '--', '.', ':(exclude).collab'])
+  const staged = gitPaths(repo, ['diff', '-z', '--cached', '--name-only', '--', '.', ':(exclude).collab'])
+  const untracked = gitPaths(repo, ['ls-files', '-z', '--others', '--exclude-standard', '--', '.', ':(exclude).collab'])
+  if (!tracked || !staged || !untracked) return null
+  return [...tracked, ...staged, ...untracked].some(isProductPath)
+}
+
 function ciFreshness(repo, taskDir, value, classified) {
   if (!classified.pass) return classified
   if (!isObject(value) || typeof value.ranAt !== 'string' || !value.ranAt.trim()) {
@@ -673,6 +696,9 @@ function ciFreshness(repo, taskDir, value, classified) {
   const productMs = productCommitMs(repo)
   if (productMs == null) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
   if (productMs > ran + 1000) return { status: 'stale', pass: false, evidence: 'stale' }
+  const dirty = uncommittedProduct(repo)
+  if (dirty == null) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
+  if (dirty) return { status: 'stale', pass: false, evidence: 'stale' }
   const bound = commandsBound(repo, taskDir, ran, classified.commands)
   if (!bound.ok) {
     return bound.evidence === 'stale'
@@ -774,14 +800,18 @@ function classifyVerdict(repo, taskDir) {
   const head = resolveCommit(repo, 'HEAD')
   const reviewed = resolveCommit(repo, sha)
   if (!head || !reviewed) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
-  if (head === reviewed) return { status: 'pass', pass: true, evidence: 'pass' }
-  const ancestor = gitAncestor(repo, sha)
+  const ancestor = head === reviewed ? 'yes' : gitAncestor(repo, sha)
   if (ancestor === 'unknown') return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
   if (ancestor !== 'yes') return { status: 'stale', pass: false, evidence: 'stale' }
-  const reviewedTree = codeDigest(repo, reviewed)
-  const headTree = codeDigest(repo, head)
-  if (!reviewedTree || !headTree) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
-  if (reviewedTree !== headTree) return { status: 'stale', pass: false, evidence: 'stale' }
+  if (head !== reviewed) {
+    const reviewedTree = codeDigest(repo, reviewed)
+    const headTree = codeDigest(repo, head)
+    if (!reviewedTree || !headTree) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+    if (reviewedTree !== headTree) return { status: 'stale', pass: false, evidence: 'stale' }
+  }
+  const dirty = uncommittedProduct(repo)
+  if (dirty == null) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  if (dirty) return { status: 'stale', pass: false, evidence: 'stale' }
   return { status: 'pass', pass: true, evidence: 'pass' }
 }
 
@@ -948,9 +978,12 @@ export function readBuildTask(repo, taskId) {
       test_levels: null, status: null, model: null, business_rounds: null, infra_retries: null, gate: null,
     }
   }
-  const stateParsed = readJson(path.join(taskDir, 'state.json'))
-  const state = stateParsed.ok && isObject(stateParsed.value) ? stateParsed.value : null
-  const stateError = fs.existsSync(path.join(taskDir, 'state.json')) && !stateParsed.ok
+  const stateFile = path.join(taskDir, 'state.json')
+  const stateExists = fs.existsSync(stateFile)
+  const stateParsed = stateExists ? readJson(stateFile) : null
+  const state = stateParsed && stateParsed.ok && isObject(stateParsed.value) ? stateParsed.value : null
+  const stateError = stateExists && !state
+  const stateErrorText = stateParsed && stateParsed.ok ? 'state.json 损坏' : 'state.json 无法读取'
   let evaluated = null
   try { evaluated = evaluateBuildGate(repo, taskDir) } catch (e) {
     return {
@@ -962,6 +995,13 @@ export function readBuildTask(repo, taskId) {
   const origin = evaluated.origin
   if (!origin.ok) {
     const corrupt = origin.reason === 'origin_corrupt' || origin.source === 'error'
+    if (!corrupt && stateError) {
+      return {
+        id: String(taskId), state: 'error', error: stateErrorText, source: 'blueprint',
+        test_levels: Array.isArray(origin.levels) ? origin.levels : null, status: null,
+        model: actualModel(taskDir), business_rounds: null, infra_retries: null, gate: evaluated.gate,
+      }
+    }
     return {
       id: String(taskId),
       state: corrupt ? 'error' : 'ok',
@@ -976,7 +1016,7 @@ export function readBuildTask(repo, taskId) {
   }
   if (stateError) {
     return {
-      id: String(taskId), state: 'error', error: 'state.json 无法读取', source: origin.source || null,
+      id: String(taskId), state: 'error', error: stateErrorText, source: origin.source || null,
       test_levels: origin.levels || null, status: null, model: actualModel(taskDir),
       business_rounds: null, infra_retries: null, gate: evaluated.gate,
     }

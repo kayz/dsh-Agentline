@@ -246,6 +246,60 @@ test('collab-only commits keep the reviewed code fresh, and a later product comm
   assert.equal(moved.result.pass, false)
 })
 
+test('uncommitted product edits stale CI and verdict; collab-only edits stay fresh', (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const head = git(repo, ['rev-parse', 'HEAD']).trim()
+  writeAcceptance(taskDir, ['AC-1', 'AC-2'])
+  writeCi(taskDir, passReport(new Date(Date.now() + 60_000).toISOString()))
+  fs.writeFileSync(path.join(taskDir, 'verdict.json'), JSON.stringify({ verdict: 'pass', git_sha: head }))
+  fs.writeFileSync(path.join(taskDir, 'audit-note.txt'), 'audit\n', 'utf8')
+  const checks = () => {
+    const evaluated = evaluateBuildGate(repo, taskDir)
+    return {
+      ci: evaluated.gate.checks.find((item) => item.id === 'T.ci_all_pass'),
+      verdict: evaluated.gate.checks.find((item) => item.id === 'T.verdict_pass'),
+      pass: evaluated.result.pass,
+    }
+  }
+  const collabOnly = checks()
+  assert.equal(collabOnly.ci.evidence, 'pass')
+  assert.equal(collabOnly.ci.pass, true)
+  assert.equal(collabOnly.verdict.evidence, 'pass')
+  assert.equal(collabOnly.verdict.pass, true)
+
+  fs.writeFileSync(path.join(repo, 'README.md'), '# changed\n', 'utf8')
+  const edited = checks()
+  assert.equal(edited.ci.pass, false)
+  assert.equal(edited.ci.evidence, 'stale')
+  assert.equal(edited.verdict.pass, false)
+  assert.equal(edited.verdict.evidence, 'stale')
+  assert.equal(edited.pass, false)
+  fs.writeFileSync(path.join(repo, 'README.md'), '# repo\n', 'utf8')
+  const restored = checks()
+  assert.equal(restored.ci.evidence, 'pass')
+  assert.equal(restored.verdict.evidence, 'pass')
+
+  fs.writeFileSync(path.join(repo, 'src.txt'), 'new\n', 'utf8')
+  const untracked = checks()
+  assert.equal(untracked.ci.evidence, 'stale')
+  assert.equal(untracked.verdict.evidence, 'stale')
+  fs.rmSync(path.join(repo, 'src.txt'))
+  assert.equal(checks().ci.evidence, 'pass')
+
+  fs.writeFileSync(path.join(repo, 'README.md'), '# staged\n', 'utf8')
+  git(repo, ['add', 'README.md'])
+  fs.writeFileSync(path.join(repo, 'README.md'), '# repo\n', 'utf8')
+  const staged = checks()
+  assert.equal(staged.ci.evidence, 'stale')
+  assert.equal(staged.verdict.evidence, 'stale')
+  assert.equal(staged.pass, false)
+  git(repo, ['checkout', 'HEAD', '--', 'README.md'])
+  const cleared = checks()
+  assert.equal(cleared.ci.evidence, 'pass')
+  assert.equal(cleared.verdict.evidence, 'pass')
+})
+
 test('keeping AC ids while changing the committed command does not pass the old CI report', (t) => {
   const { repo, taskDir } = makeRepo()
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
