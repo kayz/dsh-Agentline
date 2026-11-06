@@ -714,4 +714,49 @@ test.describe('build ui', { concurrency: 1 }, () => {
     assert.doesNotMatch(textOfId(root, 'build-check-T.ci_all_pass'), /通过/)
     assert.match(textOfId(root, 'build-gate'), /不通过/)
   })
+
+  test('a task recorded on main stays an error when the worktree record is damaged', async (t) => {
+    const home = makeHome()
+    const project = makeProject('mainrec')
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-build-ui-wt-'))
+    const wt = path.join(parent, 'wt')
+    t.after(() => {
+      try { execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: project, stdio: 'ignore' }) } catch { /* 目录随后删掉 */ }
+      fs.rmSync(home, { recursive: true, force: true })
+      fs.rmSync(project, { recursive: true, force: true })
+      fs.rmSync(parent, { recursive: true, force: true })
+    })
+    const git = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+    git(['init', '-q', '-b', 'main'])
+    git(['config', 'user.email', 'test@example.com'])
+    git(['config', 'user.name', 'Test'])
+    fs.writeFileSync(path.join(project, 'README.md'), '# repo\n', 'utf8')
+    git(['add', 'README.md'])
+    git(['commit', '-qm', 'init'])
+    writeJson(path.join(project, '.collab', 'blueprint', 'bp', 'materialized.json'), {
+      tasks: [{ node: 'T-001', task: '001', node_sha256: 'sha256:' + 'ab'.repeat(32) }],
+    })
+    git(['worktree', 'add', '-b', 'task/001', wt, 'main'])
+    writeJson(path.join(wt, '.collab', 'tasks', '001', 'state.json'), {
+      id: '001', status: 'designed', history: [],
+    })
+    fs.mkdirSync(path.join(wt, '.collab', 'blueprint', 'bp'), { recursive: true })
+    fs.writeFileSync(path.join(wt, '.collab', 'blueprint', 'bp', 'materialized.json'), '{', 'utf8')
+
+    const forward = await boot(home, wt)
+    installFetch(makeServer({
+      ...forward,
+      projects: projectsOf([{ title: 'wt', path: wt, enabled: true, tasks: { total: 1, active: 1, last: 'designed' } }], wt),
+    }))
+    const root = await mountCockpit()
+    await settle(root)
+    click(root, findById(root, 'tab-build'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-row-001'), /错误/)
+    assert.doesNotMatch(textOfId(root, 'build-row-001'), /旧任务/)
+    click(root, findById(root, 'build-item-001'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
+    assert.equal(findById(root, 'build-source'), null)
+  })
 })

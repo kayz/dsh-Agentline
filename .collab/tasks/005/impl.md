@@ -121,3 +121,27 @@ T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pa
 | AC-5 `node --test orchestrator/test/build-roles.test.mjs` | 4 通过 |
 | AC-6 `node --test plugin/test/build-ui.test.mjs` | 4 通过。物化记录仍在、来源缺失或改成 adhoc 的任务显示错误，不显示旧任务或独立 |
 | AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 183 通过；插件 21 通过 |
+
+## 权威物化记录在 main
+
+评审指出：任务工作树里的 `materialized.json` 被删掉或损坏后，再删掉 `origin.json`，会跳过这份坏记录，把任务当成旧任务。main 上仍在的物化记录没有被读取，于是单步会调用模型，`T.origin_valid` 通过，投影也显示旧任务。
+
+身份现在同时看三处，任何一处的完整记录列出该任务都算 Blueprint 来源：
+
+- 当前目录里的 `materialized.json`
+- main 工作区里的同一文件（物化后往往还没提交，只在主工作区）
+- 已经提交到 `main` 的同一文件
+
+记录列出该任务时，来源缺失仍是 `origin_corrupt` / `missing`。文件读不出、JSON 损坏或 `tasks` 不是数组，不再跳过；如果没有任何完整记录能确认身份，原因是 `origin_corrupt` / `unconfirmed`。这两种都不调用模型，不写 `state.json`。`T.origin_valid` 是 `fail:corrupt` 且不通过，投影是错误「来源损坏」，不是旧任务。确认 main 和工作树都没有这条记录时，旧任务和带 `reason` 的 adhoc 仍走原来的路径。
+
+这一轮自测：
+
+| 验收 | 结果 |
+|---|---|
+| AC-1 `node --check` 三个入口 | 退出码 0，输出 `AC-1 OK` |
+| AC-2 `node --test orchestrator/test/build-source.test.mjs` | 6 通过。工作树没有物化记录、工作树记录损坏、以及两边工作区都损坏但 `main` 提交里仍有记录时，单步和 `runBuild` 都是 `origin_corrupt` / `missing`，模型调用为 0；提交也被改坏后是 `unconfirmed`。gate 不通过，投影为来源损坏 |
+| AC-3 `node --test orchestrator/test/build-execution.test.mjs` | 4 通过 |
+| AC-4 `node --test orchestrator/test/build-gate.test.mjs` | 6 通过 |
+| AC-5 `node --test orchestrator/test/build-roles.test.mjs` | 4 通过 |
+| AC-6 `node --test plugin/test/build-ui.test.mjs` | 5 通过。工作树记录损坏、来源缺失、main 工作区仍列着该任务时，Build 行显示错误，详情是来源损坏，不显示旧任务 |
+| AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 184 通过；插件 22 通过 |

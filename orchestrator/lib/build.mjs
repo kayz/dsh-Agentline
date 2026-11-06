@@ -176,30 +176,151 @@ function approvalItems(doc) {
   return { ok: true, items: doc.items.filter((item) => isObject(item)) }
 }
 
-/** 物化记录仍列出该任务时，缺失或改写后的来源不能再走旧任务路径。 */
-function materializedTask(repo, taskId) {
+const MATERIALIZED_REL = /^\.collab\/blueprint\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/materialized\.json$/
+
+function sameDir(a, b) {
+  if (!a || !b) return false
+  try { return fs.realpathSync(a) === fs.realpathSync(b) } catch {
+    return path.resolve(a) === path.resolve(b)
+  }
+}
+
+/** main 工作区。未提交的物化记录在这里，不在任务工作树里。 */
+function mainCheckout(repo) {
+  const listed = gitText(repo, ['worktree', 'list', '--porcelain'])
+  if (listed != null) {
+    let first = null
+    let onMain = null
+    for (const block of listed.replace(/\r\n/g, '\n').split(/\n\n+/)) {
+      let dir = null
+      let branch = null
+      for (const line of block.split('\n')) {
+        if (line.startsWith('worktree ')) dir = line.slice('worktree '.length).trim()
+        else if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim()
+      }
+      if (!dir) continue
+      if (!first) first = dir
+      if (branch === 'refs/heads/main') onMain = dir
+    }
+    if (onMain || first) return onMain || first
+  }
+  const common = gitText(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+  if (common == null) return null
+  const dir = common.trim()
+  return path.basename(dir) === '.git' ? path.dirname(dir) : null
+}
+
+function takeMaterialized(text) {
+  let value
+  try { value = JSON.parse(text) } catch { return { problem: 'unreadable' } }
+  if (!isObject(value) || !Array.isArray(value.tasks)) return { problem: 'structure' }
+  return { tasks: value.tasks }
+}
+
+function scanBlueprintDir(repo) {
   const root = path.join(repo, BLUEPRINT_DIR)
-  let entries = []
-  try { entries = fs.readdirSync(root, { withFileTypes: true }) } catch { return null }
-  const id = String(taskId)
+  const records = []
+  const problems = []
+  let entries
+  try { entries = fs.readdirSync(root, { withFileTypes: true }) } catch (e) {
+    if (e && e.code === 'ENOENT') return { records, problems }
+    problems.push('unreadable')
+    return { records, problems }
+  }
   for (const ent of entries) {
     if (!ent.isDirectory()) continue
     const file = path.join(root, ent.name, 'materialized.json')
     let st
-    try { st = fs.statSync(file) } catch { continue }
-    if (!st.isFile()) continue
-    const parsed = readJson(file)
-    if (!parsed.ok || !isObject(parsed.value) || !Array.isArray(parsed.value.tasks)) continue
-    const row = parsed.value.tasks.find((item) => item && String(item.task) === id)
-    if (row) return { id: ent.name, row }
+    try { st = fs.statSync(file) } catch (e) {
+      if (e && e.code === 'ENOENT') continue
+      problems.push('unreadable')
+      continue
+    }
+    if (!st.isFile()) {
+      problems.push('structure')
+      continue
+    }
+    let text
+    try { text = fs.readFileSync(file, 'utf8') } catch {
+      problems.push('unreadable')
+      continue
+    }
+    const taken = takeMaterialized(text)
+    if (taken.problem) problems.push(taken.problem)
+    else records.push({ id: ent.name, tasks: taken.tasks })
   }
+  return { records, problems }
+}
+
+/** 已提交到 main 的物化记录。工作区副本被删掉时仍以这里为准。 */
+function scanMainCommit(repo) {
+  if (gitText(repo, ['rev-parse', '--verify', '--quiet', 'refs/heads/main']) == null) {
+    return { unavailable: true, records: [], problems: [] }
+  }
+  const listed = gitText(repo, ['ls-tree', '-r', '--name-only', 'main', '--', '.collab/blueprint'])
+  if (listed == null) return { unavailable: false, records: [], problems: ['unreadable'] }
+  const records = []
+  const problems = []
+  for (const rel of listed.replace(/\r\n/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean)) {
+    if (!rel.endsWith('/materialized.json')) continue
+    if (!MATERIALIZED_REL.test(rel)) {
+      problems.push('structure')
+      continue
+    }
+    const text = gitText(repo, ['show', `main:${rel}`])
+    if (text == null) {
+      problems.push('unreadable')
+      continue
+    }
+    const taken = takeMaterialized(text)
+    if (taken.problem) problems.push(taken.problem)
+    else records.push({ id: rel.split('/')[2], tasks: taken.tasks })
+  }
+  return { unavailable: false, records, problems }
+}
+
+/**
+ * 权威记录是 main 工作区及其 main 提交。
+ * 当前工作树的副本可以额外证明身份，但缺失、读不出、损坏或结构不符都不能当成「没有这条记录」。
+ */
+function collectMaterialized(repo) {
+  const records = []
+  const problems = []
+  const dirs = []
+  const addDir = (dir) => {
+    if (!dir || dirs.some((have) => sameDir(have, dir))) return
+    dirs.push(dir)
+    const scan = scanBlueprintDir(dir)
+    records.push(...scan.records)
+    problems.push(...scan.problems)
+  }
+  addDir(repo)
+  addDir(mainCheckout(repo))
+  const committed = scanMainCommit(repo)
+  if (!committed.unavailable) {
+    records.push(...committed.records)
+    problems.push(...committed.problems)
+  }
+  return { records, problems }
+}
+
+function materializedTask(repo, taskId) {
+  const evidence = collectMaterialized(repo)
+  const id = String(taskId)
+  for (const rec of evidence.records) {
+    const row = rec.tasks.find((item) => item && String(item.task) === id)
+    if (row) return { id: rec.id, row }
+  }
+  if (evidence.problems.length) return { unconfirmed: true }
   return null
 }
 
 /**
  * Blueprint 物化任务在每次步骤前重新核对来源。
- * 没有任何物化记录指向该任务、且没有 origin.json 时，旧任务放行。
- * 物化记录仍列出该任务时，来源文件缺失或被改成 adhoc 都拒绝。
+ * 身份看 main 上的物化记录（工作区和已提交内容），不看任务工作树里那份副本是否还在。
+ * 记录列出该任务时，来源文件缺失或被改成 adhoc 都拒绝。
+ * 记录损坏、读不出或结构不符，且没有任何完整记录能确认身份时，拒绝，不能当成旧任务。
+ * 确认没有任何记录、且没有 origin.json 时，旧任务放行。
  * 文件在就必须先通过 schema 和来源字段；
  * 缺字段、kind 被改成 legacy，或读不出来，都是损坏，不能当成旧任务。
  */
@@ -207,6 +328,7 @@ export function inspectOrigin(repo, taskDir) {
   const recorded = materializedTask(repo, taskIdOf(taskDir))
   const file = path.join(taskDir, 'origin.json')
   if (!fs.existsSync(file)) {
+    if (recorded && recorded.unconfirmed) return refuse('origin_corrupt', 'unconfirmed', { source: 'error' })
     if (recorded) return refuse('origin_corrupt', 'missing', { source: 'error' })
     return { ok: true, legacy: true, source: 'legacy', reason: null, detail: null }
   }
@@ -219,6 +341,7 @@ export function inspectOrigin(repo, taskDir) {
   if (!parsed.ok || !isObject(parsed.value)) return refuse('origin_corrupt', 'unreadable', { source: 'error' })
   const origin = parsed.value
   if (origin.kind === 'adhoc' && typeof origin.reason === 'string' && origin.reason.trim()) {
+    if (recorded && recorded.unconfirmed) return refuse('origin_corrupt', 'unconfirmed', { source: 'error' })
     if (recorded) return refuse('origin_corrupt', 'adhoc', { source: 'error' })
     return { ok: true, legacy: true, source: 'adhoc', reason: null, detail: null }
   }
