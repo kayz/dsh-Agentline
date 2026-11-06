@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runCapture, runProcess } from '../process.mjs'
 import { parseEventLines, envFor, failureText } from './shared.mjs'
+import { cursorReply } from './reply.mjs'
 
 function cursorEntry(cfg) {
   if (cfg.entry) return cfg.entry
@@ -91,11 +92,14 @@ export const cursor = (cfg) => ({
       }
       if (evt.type === 'error') failure = evt.message || evt.error?.message || 'error event'
     }
+    const reply = cursorReply(res.stdout)
     return {
       exitCode: res.timedOut ? 124 : res.exitCode,
       usage,
       usageSource: usage ? 'cli_json' : 'none',
-      modelResolved: null,
+      stdout: res.stdout,
+      text: reply.text,
+      modelResolved: reply.modelResolved,
       error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || failure || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },

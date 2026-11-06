@@ -1,0 +1,40 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "15a0eca2bc975e48bf4a92b7d32a531e14bad9b1",
+  "passed": 3,
+  "total": 5,
+  "findings": [
+    {
+      "severity": "P1",
+      "description": "相同模型经不同供应渠道且 identity_group 不同或缺省时，可绕过模型两两不同的检查并批准物化。",
+      "evidence": "orchestrator/lib/blueprint.mjs:266-283,1195-1212,1327-1329,1498-1505; orchestrator/test/blueprint-g1.test.mjs:346-353"
+    }
+  ],
+  "results": [
+    {
+      "id": "AC-1",
+      "pass": true,
+      "evidence": "ci-results.json AC-1: exitCode 0, AC-1 OK"
+    },
+    {
+      "id": "AC-2",
+      "pass": false,
+      "evidence": "CI AC-2: exitCode 0, 8 passed, AC-2 OK; blueprint.mjs:266-283,1195-1212,1327-1329,1498-1505 模型隔离可绕过"
+    },
+    {
+      "id": "AC-3",
+      "pass": false,
+      "evidence": "CI AC-3: exitCode 0, AC-3 OK; blueprint.mjs:1195-1199 未独立比较模型 ID，blueprint-g1.test.mjs:346-353 缺跨渠道同模型反例"
+    },
+    {
+      "id": "AC-4",
+      "pass": true,
+      "evidence": "CI AC-4: exitCode 0, AC-4 OK; plugin/test/blueprint-ui.test.mjs 覆盖真实、空、错误、切换项目和动作"
+    },
+    {
+      "id": "AC-5",
+      "pass": true,
+      "evidence": "CI AC-5: exitCode 0, orchestrator 157 passed, plugin 17 passed, AC-5 OK"
+    }
+  ]
+}

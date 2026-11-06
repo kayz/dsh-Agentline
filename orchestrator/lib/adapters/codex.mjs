@@ -1,5 +1,6 @@
 import { runCapture, runProcess } from '../process.mjs'
 import { lastJson, envFor, effortArgs, failureText } from './shared.mjs'
+import { codexReply } from './reply.mjs'
 
 /** 把 `codex debug models` 的 JSON 归一化；导出供测试 */
 export function parseCodexModels(data) {
@@ -114,11 +115,14 @@ export const codex = (cfg) => ({
       if (evt.type === 'turn.failed') failure = evt.error?.message || 'turn failed'
       if (evt.type === 'error' && !failure) failure = evt.message || 'error event'
     }
+    const reply = codexReply(res.stdout)
     return {
       exitCode: res.timedOut ? 124 : res.exitCode,
       usage,
       usageSource: usage ? 'cli_json' : 'none',
-      modelResolved: null,
+      stdout: res.stdout,
+      text: reply.text,
+      modelResolved: reply.modelResolved,
       error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || failure || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },

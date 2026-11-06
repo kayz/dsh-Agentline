@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runCapture, runProcess, resolveCommand } from '../process.mjs'
 import { lastJson, envFor, failureText } from './shared.mjs'
+import { geminiReply } from './reply.mjs'
 
 const GEMINI_ID_RE = /gemini-[0-9][0-9A-Za-z.-]{1,40}/g
 
@@ -117,11 +118,14 @@ export const gemini = (cfg) => ({
       stallMinutes: cfg.limits?.stallMinutes,
     })
     const j = lastJson(res.stdout)
+    const reply = geminiReply(res.stdout)
     return {
       exitCode: res.timedOut ? 124 : res.exitCode,
       usage: null,
       usageSource: 'none',
-      modelResolved: model,
+      stdout: res.stdout,
+      text: reply.text,
+      modelResolved: reply.modelResolved,
       error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || (j && j.error ? (j.error.message || j.error) : (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`))))),
     }
   },

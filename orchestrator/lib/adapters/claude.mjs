@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { runCapture, runProcess, resolveCommand } from '../process.mjs'
 import { lastJson, parseEventLines, envFor, effortArgs, failureText } from './shared.mjs'
+import { claudeReply } from './reply.mjs'
 
 /** 解析 Claude stream-json 行：tool_use/tool_result 用于区分「工具在跑」与「API 静默」 */
 export function classifyClaudeLine(line) {
@@ -142,13 +143,15 @@ export const claude = (cfg) => ({
       cache_write: j.usage.cache_creation_input_tokens ?? null,
       cost_usd: j.total_cost_usd ?? null,
     } : null
-    const modelResolved = j && j.modelUsage ? Object.keys(j.modelUsage)[0] : null
+    const reply = claudeReply(res.stdout)
     const apiError = final && final.is_error ? (final.result || 'is_error') : null
     return {
       exitCode: res.timedOut ? 124 : res.exitCode,
       usage,
       usageSource: usage ? 'cli_json' : 'none',
-      modelResolved,
+      stdout: res.stdout,
+      text: reply.text,
+      modelResolved: reply.modelResolved,
       error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || apiError || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },

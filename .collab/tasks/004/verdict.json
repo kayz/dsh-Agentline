@@ -1,0 +1,16 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "30e1e258c4535c8588df5be01dffc7d95403bccf",
+  "passed": 4,
+  "total": 5,
+  "findings": [
+    {"severity": "P2", "description": "Blueprint 列表读取异常被吞掉并显示为空状态，无法区分读取错误。", "evidence": "orchestrator/lib/blueprint.mjs:454-457；plugin/lib/index.js:995-996；plugin/test/blueprint-ui.test.mjs:507-525"}
+  ],
+  "results": [
+    {"id": "AC-1", "pass": true, "evidence": ".collab/tasks/004/ci-results.json AC-1：exitCode 0，AC-1 OK"},
+    {"id": "AC-2", "pass": true, "evidence": ".collab/tasks/004/ci-results.json AC-2：exitCode 0，AC-2 OK；orchestrator/test/blueprint-cli.test.mjs:224,279,330,351,429,466"},
+    {"id": "AC-3", "pass": true, "evidence": ".collab/tasks/004/ci-results.json AC-3：exitCode 0，AC-3 OK；orchestrator/test/blueprint-g1.test.mjs:250-925"},
+    {"id": "AC-4", "pass": false, "evidence": ".collab/tasks/004/ci-results.json AC-4：exitCode 0，AC-4 OK；orchestrator/lib/blueprint.mjs:454-457 和 plugin/lib/index.js:995-996 吞掉列表读取错误；plugin/test/blueprint-ui.test.mjs:507-525 未覆盖有效项目内根目录读取错误"},
+    {"id": "AC-5", "pass": true, "evidence": ".collab/tasks/004/ci-results.json AC-5：exitCode 0，orchestrator 163 项、插件 17 项通过，AC-5 OK"}
+  ]
+}

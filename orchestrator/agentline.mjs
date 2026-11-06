@@ -25,6 +25,11 @@ import {
   STUDIO_ROLES, readStudio, listSessions, createSession, runStudioStep, answerStudio,
   concludeStudio, evaluateG0, currentStep, blockingQuestions, StudioError,
 } from './lib/studio.mjs'
+import {
+  BLUEPRINT_ROLES, readBlueprint, listSessions as listBlueprintSessions, createBlueprint,
+  runBlueprintStep, reviewBlueprint, approveBlueprint, materializeBlueprint, evaluateG1,
+  decide, BlueprintError,
+} from './lib/blueprint.mjs'
 import { discoverAll, saveDiscovery, discoverySummary, setRoleCandidates, addModel, formatModelTable } from './lib/models.mjs'
 import { buildCatalog } from './lib/model-catalog.mjs'
 import { effectiveRole, readProject } from './lib/routing.mjs'
@@ -674,6 +679,135 @@ async function cmdStudio() {
   }
 }
 
+// ───────────────────────────── blueprint ─────────────────────────────
+/**
+ * Blueprint 控制面：状态只存在 <repo>/.collab/blueprint/<id>/。
+ * 每次 run/review 只执行一个角色步骤；批准和物化都按落盘重新计算 G1。
+ */
+function blueprintRoleOverrides() {
+  const out = {}
+  for (const role of BLUEPRINT_ROLES) {
+    const flag = role.replace(/_/g, '-')
+    if (args[flag]) out[role] = String(args[flag])
+  }
+  return out
+}
+
+function printBlueprint(session, g1) {
+  const phase = session.phase || '-'
+  const round = session.round ? `${session.round.current}/${session.round.max}` : '-'
+  const awaiting = session.awaiting && session.awaiting.kind
+  log(`blueprint ${session.id}  status=${session.status}  phase=${phase}  round=${round}${awaiting ? '  awaiting=' + awaiting : ''}`)
+  for (const role of BLUEPRINT_ROLES) {
+    const r = session.roles?.[role]
+    log(`  ${role.padEnd(16)} ${r ? `${r.model} (${r.id}, ${r.tier}, ${r.vendor || '-'})` : '(unset)'}`)
+  }
+  if (g1) {
+    log(`  G1 ${g1.pass ? 'PASS' : g1.status}  approval=${g1.approval_valid ? 'valid' : 'invalid'}  hash=${g1.content_hash || '-'}`)
+    for (const c of g1.checks || []) log(`  ${c.pass ? '✓' : '✗'} ${c.id}`)
+  }
+}
+
+async function cmdBlueprint() {
+  const sub = args._[1]
+  if (!['new', 'run', 'review', 'approve', 'materialize', 'status'].includes(sub)) {
+    fail('usage: agentline blueprint new|run|review|approve|materialize|status --repo <path> [--id <id>] [...]')
+  }
+  const id = args.id || args._[2]
+  try {
+    if (sub === 'status') {
+      if (!id) {
+        const sessions = listBlueprintSessions(repo)
+        if (args.json) { log(JSON.stringify({ repo, sessions }, null, 2)); return }
+        if (!sessions.length) { log(`(no blueprint sessions in ${path.join(repo, '.collab', 'blueprint')})`); return }
+        for (const s of sessions) log(`${s.id.padEnd(24)} state=${s.state} status=${s.status} phase=${s.phase || '-'} round=${s.round ?? '-'}`)
+        return
+      }
+      const r = readBlueprint(repo, id)
+      // 指定会话不存在，或目录里没有 state.json，都是缺失数据：文本和 JSON 都要非零退出。
+      if (r.state === 'missing' || r.state === 'empty') {
+        const where = path.join(repo, '.collab', 'blueprint', id)
+        const msg = r.state === 'missing'
+          ? `blueprint ${id}: missing (${where})`
+          : `blueprint ${id}: empty (state.json missing)`
+        if (args.json) {
+          log(JSON.stringify({ id, ...r, g1: null, next: null }, null, 2))
+          process.exit(1)
+        }
+        fail(msg)
+      }
+      const g1 = r.session && r.state !== 'corrupt' ? evaluateG1(repo, id) : null
+      const next = r.session && r.state !== 'corrupt' ? decide(r.session, g1) : null
+      if (args.json) {
+        log(JSON.stringify({ id, ...r, g1, next }, null, 2))
+        if (r.state === 'corrupt') process.exit(1)
+        return
+      }
+      if (r.state === 'corrupt') {
+        log(`blueprint ${id}: corrupt`)
+        for (const e of r.errors) log('  ' + e)
+        process.exit(1)
+      }
+      printBlueprint(r.session, g1)
+      if (next) log(`  next=${next.kind === 'step' ? next.role : next.code}`)
+      return
+    }
+
+    if (!id) fail(`blueprint ${sub} requires --id <id>`)
+
+    if (sub === 'new') {
+      const session = createBlueprint(repo, {
+        id: String(id),
+        title: args.title,
+        input: args.input || args._[3],
+        fromStudio: args['from-studio'] ? String(args['from-studio']) : null,
+      }, { config, projectCfg, overrides: blueprintRoleOverrides() })
+      if (args.json) { log(JSON.stringify(session, null, 2)); return }
+      log(`created blueprint session ${session.id} -> ${path.relative(repo, path.join(repo, '.collab', 'blueprint', session.id)).replaceAll('\\', '/')}`)
+      printBlueprint(session, null)
+      log('下一步：agentline blueprint run --repo <path> --id ' + session.id)
+      return
+    }
+
+    if (sub === 'run' || sub === 'review') {
+      const adapterFactory = await studioAdapterFactory()
+      const fn = sub === 'review' ? reviewBlueprint : runBlueprintStep
+      const result = await fn(repo, String(id), { config, adapterFactory, log })
+      const g1 = evaluateG1(repo, id)
+      if (args.json) { log(JSON.stringify({ id, step: result.step, role: result.role, round: result.round, session: result.session, g1 }, null, 2)); return }
+      log(`OK step=${result.step} status=${result.session.status} phase=${result.session.phase} round=${result.session.round.current}`)
+      printBlueprint(result.session, g1)
+      return
+    }
+
+    if (sub === 'approve') {
+      const result = approveBlueprint(repo, String(id), {
+        text: args.text || (args._[3] ? String(args._[3]) : ''),
+        channel: args.channel || 'cli',
+      })
+      if (args.json) { log(JSON.stringify({ id, replayed: result.replayed, approval: result.approval, g1: result.g1 }, null, 2)); return }
+      log(`G1 APPROVED ${result.approval.approval_id} hash=${result.approval.content_hash}${result.replayed ? ' (unchanged)' : ''}`)
+      printBlueprint(result.session, result.g1)
+      return
+    }
+
+    if (sub === 'materialize') {
+      const result = materializeBlueprint(repo, String(id), { dryRun: args['dry-run'] === true })
+      if (args.json) {
+        log(JSON.stringify({ id, replayed: result.replayed, dry_run: result.dry_run, tasks: result.tasks, plan_digest: result.plan_digest }, null, 2))
+        return
+      }
+      const ids = (result.tasks || []).map((t) => `${t.node}->${t.task}`).join(', ')
+      if (result.dry_run) log(`dry-run ${id}: ${ids}`)
+      else log(`${result.replayed ? 'replayed' : 'materialized'} ${id}: ${ids}`)
+      return
+    }
+  } catch (e) {
+    if (e instanceof BlueprintError) fail(e.message)
+    throw e
+  }
+}
+
 function help() {
   log(`agentline — 多模型协作调度器
 
@@ -705,6 +839,12 @@ function help() {
   node agentline.mjs studio answer --id <id> --decision <D-1> --text "..." | --default
   node agentline.mjs studio conclude --id <id>         （按落盘证据重新计算 G0）
   node agentline.mjs studio status [--id <id>] [--json]
+  node agentline.mjs blueprint new --id <id> --title <标题> --input "<用户输入>" [--from-studio <id>]
+  node agentline.mjs blueprint run --id <id>              （每次只执行一个角色步骤）
+  node agentline.mjs blueprint review --id <id>          （仅当下一步是 review）
+  node agentline.mjs blueprint approve --id <id> --text "<用户原话>"
+  node agentline.mjs blueprint materialize --id <id> [--dry-run]
+  node agentline.mjs blueprint status [--id <id>] [--json]
 
 公共参数：
   --repo <path>      目标仓库（默认当前目录）
@@ -732,6 +872,7 @@ switch (cmd) {
   case 'answer': cmdAnswer(); break
   case 'inputs': cmdInputs(); break
   case 'studio': await cmdStudio(); break
+  case 'blueprint': await cmdBlueprint(); break
   case 'help': case '--help': case undefined: help(); break
   default: help(); process.exit(2)
 }
