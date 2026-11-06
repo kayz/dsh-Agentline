@@ -4,10 +4,13 @@
 
 | 文件 | 变更 | 用途 |
 |---|---|---|
-| `orchestrator/lib/blueprint.mjs` | 新增，并按设计收紧 G1 与物化回滚 | Blueprint 控制面：会话落盘、单步 `design → testability → review`、G1、内容哈希、批准与物化；落盘 AC 的 `text` / `levels` 与生成入口同一套类型 |
+| `orchestrator/lib/blueprint.mjs` | 新增，并按设计收紧 G1 与物化回滚 | Blueprint 控制面：会话落盘、单步 `design → testability → review`、G1、内容哈希、批准与物化；身份和回复只从本次 stdout 解析 |
+| `orchestrator/lib/adapters/reply.mjs` | 新增 | 从 Claude、CodeBuddy、Codex、Gemini、Cursor 的 stdout 取出回复正文和实际模型 |
+| `orchestrator/lib/adapters/*.mjs` | 修改 | `run()` 返回解析后的 `text`、`stdout` 和 `modelResolved`；Gemini 不再把请求模型写进 `modelResolved` |
+| `orchestrator/test/adapter-reply.test.mjs` | 新增 | 各 CLI 协议的正例，以及缺模型、多模型、Gemini 回显都不算已验证身份 |
 | `orchestrator/agentline.mjs` | 修改 | `blueprint new\|run\|review\|approve\|materialize\|status` |
-| `orchestrator/test/blueprint-cli.test.mjs` | 新增 | 六个命令、单步顺序、失败不推进、冲突、物化保真、批准失效后重新批准、提交中途失败不留记录、未完成的新轮次不能沿用旧评审、非字符串验收不能批准或物化 |
-| `orchestrator/test/blueprint-g1.test.mjs` | 新增，并补反例 | G1 逐项正反例；来源豁免不能通过；无标题和空任务图不能通过；损坏的 blocker/finding 不能通过；当前轮未完成不能批准；测试架构变更后必须重新评审；数字 `text` 与 `null` 层级不能通过 |
+| `orchestrator/test/blueprint-cli.test.mjs` | 新增 | 六个命令、单步顺序、失败不推进、冲突、物化保真、批准失效后重新批准；夹具 stdout 走真实解析器。回显的 `modelResolved` 不能推进，只有 stdout 里的回复和模型可以 |
+| `orchestrator/test/blueprint-g1.test.mjs` | 新增，并补反例 | G1 逐项正反例；来源豁免不能通过；无标题和空任务图不能通过；损坏的 blocker/finding 不能通过；当前轮未完成不能批准；测试架构变更后必须重新评审；数字 `text` 与 `null` 层级不能通过。驱动步骤的夹具同样只提供 CLI stdout |
 | `plugin/lib/index.js` | 修改 | `/agentline/blueprint`：GET 读落盘，POST 每次只转发一条 CLI |
 | `plugin/lib/client.js` | 修改 | Blueprint 页：真实轮次、角色、findings、任务图、G1、批准与物化；空、损坏和操作失败分开 |
 | `plugin/test/blueprint-ui.test.mjs` | 新增 | 真实路由上的空、真实、错误、项目切换、单次 CLI 和原有五个页 |
@@ -42,9 +45,9 @@ G1 重读 `task-graph.json` 时，验收 `text` 用 `String(...)` 判断，`leve
 
 现在写入和重读共用 `acceptanceRecord`：类型不对就记入 `G1.graph_schema`，矩阵记为 `matrix:acceptance-type`，不能批准，也不能物化。矩阵渲染不再把 `null` 或数字收成层级名。物化在写 brief 之前再查一次，正文只拼非空字符串。字段完整的字符串验收行为不变。
 
-## 自测结果
+## 自测结果（上一轮）
 
-在仓库根用 Node 跑了与 `acceptance.md` 相同的检查（本环境是 bash，不是 pwsh）。界面没有桌面浏览器，AC-4 / AC-5 的插件测试用同一套渲染桩驱动真实 `/agentline/blueprint` 路由。
+下面是接上真实 CLI 协议之前的数字。本轮结果见文末。当时在仓库根用 Node 跑了与 `acceptance.md` 相同的检查（本环境是 bash，不是 pwsh）。界面没有桌面浏览器，AC-4 / AC-5 的插件测试用同一套渲染桩驱动真实 `/agentline/blueprint` 路由。
 
 | AC | 结果 | 输出 / 退出码 |
 |---|---|---|
@@ -61,3 +64,33 @@ G1 重读 `task-graph.json` 时，验收 `text` 用 `String(...)` 判断，`leve
 ## 遗留问题
 
 无
+
+## 真实 CLI 回复和身份
+
+上一轮评审指出两处：真实 adapter 的返回值没有模型回复，Blueprint 读 `text` / `stdout` 得到空字符串，设计步骤无法完成；Gemini 把请求参数 `model` 写进 `modelResolved`，缺少调用结果里的身份也能被当成已验证。
+
+现在六个 adapter 都从自己的 stdout 协议取出回复和模型，放进返回值的 `text`、`modelResolved` 和原始 `stdout`：
+
+- Claude：`result.result`；身份只取唯一的 `modelUsage` 键，多个键不算通过。
+- CodeBuddy：`result.result` 和结果事件上的 `model`。
+- Codex：`agent_message` 的正文。公开事件没有模型字段时身份为空；只有 `thread.started` / `turn.started` / `turn.completed` 自己带了 `model` 才采纳。
+- Gemini：`response` 正文；身份只取 `stats.models` 里唯一的键。请求参数不再写入 `modelResolved`。顶层 `model` 字段也不算。
+- Cursor 与 Cursor WSL：`result.result`（否则是 assistant 文本）；身份只取事件里唯一的 `model`。
+
+Blueprint 的 `callRole` 不再采用 adapter 对象上的 `modelResolved`。它按 provider 的 adapter id 重新解析 `stdout`。解析不到回复或唯一模型时，这一步记失败且不推进。缺失身份不能批准，也不能物化。
+
+控制面测试夹具改为写出上述协议的 stdout，再交给同一套解析函数。`BLUEPRINT_NO_IDENTITY` 会把请求模型回填到 `modelResolved`，但 stdout 里没有模型字段，步骤不推进。`BLUEPRINT_STDOUT_ONLY` 不返回 `text`，只返回协议 stdout，设计正文和 `claude-des` 身份仍能落盘。
+
+## 自测（本轮）
+
+在仓库根用 Node 跑了与 `acceptance.md` 相同的检查（本环境是 bash，不是 pwsh）。界面没有桌面浏览器，插件测试用同一套渲染桩驱动真实 `/agentline/blueprint` 路由。
+
+| AC | 结果 | 输出 / 退出码 |
+|---|---|---|
+| AC-1 | 通过 | `node --check` 三个文件后语法检查通过，退出码 0 |
+| AC-2 | 通过 | `blueprint-cli.test.mjs` 8 通过 / 0 失败，退出码 0 |
+| AC-3 | 通过 | `blueprint-g1.test.mjs` 29 通过 / 0 失败（含 28 个子例），退出码 0 |
+| AC-4 | 通过 | `blueprint-ui.test.mjs` 含在插件测试中，7 通过 / 0 失败 |
+| AC-5 | 通过 | `orchestrator` 的 `npm test` 157 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
+
+协议解析另有 `orchestrator/test/adapter-reply.test.mjs` 9 通过，已包含在 orchestrator 的 157 里。

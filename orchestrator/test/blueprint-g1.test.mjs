@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createSession, decisionContentHash, confirmedEvidenceHash, evaluateG0 } from '../lib/studio.mjs'
 import { evaluateG1, currentDigests, renderAcceptanceMatrix, sessionDir } from '../lib/blueprint.mjs'
 
@@ -50,8 +50,10 @@ const GRAPH = {
   ],
 }
 
+const REPLY_URL = pathToFileURL(path.resolve(HERE, '../lib/adapters/reply.mjs')).href
 const ADAPTER = `import fs from 'node:fs'
 import path from 'node:path'
+import { replyFromAdapter, fixtureStdout } from ${JSON.stringify(REPLY_URL)}
 function roleOf(prompt) {
   const s = String(prompt || '')
   if (s.startsWith('你是 Blueprint 的设计师')) return 'designer'
@@ -59,7 +61,7 @@ function roleOf(prompt) {
   if (s.startsWith('你是 Blueprint 的评审')) return 'reviewer'
   return 'unknown'
 }
-export default function () {
+export default function (provider) {
   return {
     async run({ prompt, model, logPath }) {
       const role = roleOf(prompt)
@@ -71,7 +73,10 @@ export default function () {
         fs.mkdirSync(path.dirname(logPath), { recursive: true })
         fs.writeFileSync(logPath, 'fixture\\n', 'utf8')
       } catch { /* ignore */ }
-      return { exitCode: 0, text, modelResolved: model }
+      const adapter = provider && provider.adapter
+      const stdout = fixtureStdout(adapter, model, text)
+      const parsed = replyFromAdapter(adapter, stdout)
+      return { exitCode: 0, stdout, text: parsed.text, modelResolved: parsed.modelResolved }
     },
   }
 }

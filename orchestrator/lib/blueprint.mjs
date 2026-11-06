@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { getAdapter } from './adapters/index.mjs'
+import { replyFromAdapter } from './adapters/reply.mjs'
 import { clampEffort } from './exec.mjs'
 import { GATE_SCHEMA, evaluateGate, sha256Content } from './contracts/gate.mjs'
 import { isRoleEligible, normalizeModel } from './model-catalog.mjs'
@@ -603,11 +604,17 @@ async function callRole({ repo, dir, role, prompt, config, adapterFactory, log, 
   if (!res || res.exitCode !== 0 || res.error) {
     throw new BlueprintError('E_MODEL_FAILED', `${role} call failed: ${(res && (res.error || `exit ${res.exitCode}`)) || 'no result'}`)
   }
-  const resolved = res.modelResolved == null ? '' : String(res.modelResolved)
+  // 只认这次 stdout 里解析出的回复和模型。adapter 回传的 modelResolved 即使等于请求名也不算身份。
+  const parsed = replyFromAdapter(provider.adapter, typeof res.stdout === 'string' ? res.stdout : '')
+  const text = typeof parsed.text === 'string' ? parsed.text : ''
+  const resolved = typeof parsed.modelResolved === 'string' ? parsed.modelResolved.trim() : ''
+  if (!text.trim()) {
+    throw new BlueprintError('E_MODEL_EMPTY', `${role} call returned no model reply in the ${provider.adapter || 'adapter'} result; step not advanced`)
+  }
   if (!resolved) throw new BlueprintError('E_MODEL_UNVERIFIED', `${role} call did not return model_resolved; identity is not verified`)
   if (resolved !== model.id) throw new BlueprintError('E_MODEL_MISMATCH', `${role} model_resolved ${resolved} != requested ${model.id}`)
   return {
-    text: String(res.text ?? res.stdout ?? ''),
+    text,
     model: assigned.model,
     modelId: model.id,
     modelResolved: resolved,

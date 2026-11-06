@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createSession, decisionContentHash, confirmedEvidenceHash, evaluateG0 } from '../lib/studio.mjs'
 import { canonicalHash, materializeBlueprint, BlueprintError } from '../lib/blueprint.mjs'
 
@@ -56,8 +56,10 @@ function goodResponses() {
   }
 }
 
+const REPLY_URL = pathToFileURL(path.resolve(HERE, '../lib/adapters/reply.mjs')).href
 const ADAPTER = `import fs from 'node:fs'
 import path from 'node:path'
+import { replyFromAdapter, fixtureStdout } from ${JSON.stringify(REPLY_URL)}
 
 function roleOf(prompt) {
   const s = String(prompt || '')
@@ -67,7 +69,7 @@ function roleOf(prompt) {
   return 'unknown'
 }
 
-export default function () {
+export default function (provider) {
   return {
     async run({ prompt, model, logPath }) {
       const role = roleOf(prompt)
@@ -81,8 +83,19 @@ export default function () {
         fs.mkdirSync(path.dirname(logPath), { recursive: true })
         fs.writeFileSync(logPath, 'fixture\\n', 'utf8')
       } catch { /* ignore */ }
-      if (process.env.BLUEPRINT_NO_IDENTITY === '1') return { exitCode: 0, text, modelResolved: null }
-      return { exitCode: 0, text, modelResolved: model }
+      const adapter = provider && provider.adapter
+      const echo = process.env.BLUEPRINT_NO_IDENTITY === '1'
+      const stdout = fixtureStdout(adapter, echo ? null : model, text)
+      const parsed = replyFromAdapter(adapter, stdout)
+      if (process.env.BLUEPRINT_STDOUT_ONLY === '1') {
+        return { exitCode: 0, stdout, modelResolved: model }
+      }
+      return {
+        exitCode: 0,
+        stdout,
+        text: parsed.text,
+        modelResolved: echo ? model : parsed.modelResolved,
+      }
     },
   }
 }
@@ -513,6 +526,27 @@ test('blueprint cli: an unfinished round cannot reuse the previous pass, and a n
   assert.match(brief, /001（T-001）/)
   assert.match(brief, /物化保留依赖与验收方向/)
   assert.match(brief, /node --test orchestrator\/test\/blueprint-cli\.test\.mjs/)
+})
+
+test('blueprint cli: reply and identity come from adapter stdout, not an echoed request', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  assert.equal(ctx.run(['new', '--id', 'proto', '--input', '协议', '--from-studio', 'src']).status, 0)
+
+  const echoed = ctx.run(['run', '--id', 'proto'], { BLUEPRINT_NO_IDENTITY: '1' })
+  assert.notEqual(echoed.status, 0)
+  assert.match(echoed.stderr, /not verified/)
+  assert.equal(ctx.readState('proto').phase, 'design')
+  assert.equal(fs.existsSync(path.join(ctx.dir('proto'), 'design.md')), false)
+
+  const fromStdout = ctx.run(['run', '--id', 'proto'], { BLUEPRINT_STDOUT_ONLY: '1' })
+  assert.equal(fromStdout.status, 0, fromStdout.stderr + fromStdout.stdout)
+  assert.match(fromStdout.stdout, /OK step=r1\.design/)
+  const design = fs.readFileSync(path.join(ctx.dir('proto'), 'design.md'), 'utf8')
+  assert.match(design, /Blueprint 控制面/)
+  const call = ctx.readState('proto').calls.find((item) => item.ok && item.role === 'designer')
+  assert.equal(call.model_resolved, 'claude-des')
+  assert.equal(call.identity, 'verified')
 })
 
 test('blueprint cli: non-string acceptance text and levels cannot be approved or materialized', (t) => {
