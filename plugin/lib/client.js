@@ -449,6 +449,31 @@ window.__ModuleLoader__.load({
       }
       const projTitle = (p) => { const x = projects.find((y) => y.path === p); return x ? x.title : (p ? String(p).split(/[\\/]/).pop() : '—') }
       const srcOf = (id) => { const t = pipeline && pipeline.ok ? ((pipeline.summary && pipeline.summary.tasks) || []).find((x) => x.id === id) : null; return t ? t.source : null }
+      const buildBoard = () => (pipeline && pipeline.ok && pipeline.summary && pipeline.summary.build) || null
+      const buildRow = (id) => {
+        const board = buildBoard()
+        const rows = board && Array.isArray(board.tasks) ? board.tasks : []
+        return rows.find((row) => row.id === id) || null
+      }
+      const countWord = (v) => (Number.isInteger(v) ? String(v) : '未知')
+      const checkWord = (c) => {
+        if (!c) return '未知'
+        const ev = String(c.evidence || '')
+        if (ev.indexOf('unknown') === 0) return '未知'
+        if (ev.indexOf('stale') === 0) return '过期'
+        return c.pass ? '通过' : '失败'
+      }
+      const sourceWord = (row) => {
+        if (!row || row.state === 'error') return row && row.state === 'error' ? '错误' : '未知'
+        if (row.source === 'blueprint') return 'Blueprint'
+        if (row.source === 'adhoc') return '独立'
+        if (row.source === 'legacy') return '旧任务'
+        return '未知'
+      }
+      const levelWord = (row) => {
+        if (!row || row.state === 'error') return row && row.state === 'error' ? '错误' : '未知'
+        return Array.isArray(row.test_levels) && row.test_levels.length ? row.test_levels.join(', ') : '未知'
+      }
       const taskReady = !!(listReady && tasks.some((t) => t.id === current) && detail && detail.task === current && project && !detailError)
 
       const doMerge = async (mode = 'permission') => {
@@ -1471,16 +1496,44 @@ window.__ModuleLoader__.load({
         h('div', { className: 'agl-fine' }, '路径、Node、默认仓库与额度凭据在 DSH「插件 → AgentLine」中设置。'),
       )
 
-      const renderBuild = () => h('div', { className: 'agl-build' },
+      const renderBuildFacts = (fact, id) => {
+        if (!fact) return h('div', { 'data-testid': 'build-facts' }, '来源：未知 · 测试层级：未知 · T gate：未知 · 模型：未知 · 业务轮次：未知 · 基础设施重试：未知')
+        if (fact.state === 'error') {
+          return h('div', { 'data-testid': 'build-facts' },
+            h('div', { 'data-testid': 'build-task-error' }, '错误：' + (fact.error || '读取失败')),
+            h('button', { className: 'agl-btn', 'data-testid': 'build-retry', onClick: refresh }, '重试'))
+        }
+        const gate = fact.gate
+        const checks = gate && Array.isArray(gate.checks) ? gate.checks : []
+        return h('div', { 'data-testid': 'build-facts' },
+          h('div', { 'data-testid': 'build-source' }, '来源：' + sourceWord(fact)),
+          h('div', { 'data-testid': 'build-levels' }, '测试层级：' + levelWord(fact)),
+          h('div', { 'data-testid': 'build-status' }, '状态：' + (fact.status || '未知')),
+          h('div', { 'data-testid': 'build-model' }, '模型：' + (fact.model || '未知')),
+          h('div', { 'data-testid': 'build-business' }, '业务轮次：' + countWord(fact.business_rounds)),
+          h('div', { 'data-testid': 'build-infra' }, '基础设施重试：' + countWord(fact.infra_retries)),
+          h('div', { 'data-testid': 'build-gate' }, 'T gate：' + (gate && gate.result ? (gate.result.pass ? '通过' : '不通过') : '未知')),
+          checks.map((c) => h('div', { key: c.id, 'data-testid': 'build-check-' + c.id }, c.id + ' ' + checkWord(c))))
+      }
+
+      const renderBuild = () => {
+        const board = buildBoard()
+        const boardError = (pipeline && pipeline.ok === false) || (board && board.state === 'error')
+        return h('div', { className: 'agl-build' },
         h('div', { className: 'agl-body' },
           h('div', { className: 'agl-list' },
-            tasks.length === 0
-              ? h('div', { className: 'agl-fine', style: { padding: '10px' } }, sourceErrors.projects ? '项目读取失败：' + sourceErrors.projects : project && !listReady ? (err || '读取中…') : '暂无任务')
+            boardError
+              ? h('div', { className: 'agl-fine', style: { padding: '10px' }, 'data-testid': 'build-error' },
+                  '错误：' + ((pipeline && pipeline.ok === false && pipeline.error) || (board && board.error) || '读取失败'),
+                  h('div', null, h('button', { className: 'agl-btn', 'data-testid': 'build-retry', onClick: refresh }, '重试')))
+              : tasks.length === 0
+              ? h('div', { className: 'agl-fine', style: { padding: '10px' }, 'data-testid': 'build-empty' }, sourceErrors.projects ? '项目读取失败：' + sourceErrors.projects : project && !listReady ? (err || '读取中…') : '暂无任务')
               : tasks.slice().reverse().map((t) => {
                   const st = (t.state && t.state.status) || '?'
                   return h('div', {
                     key: t.id,
                     className: 'agl-item' + (current === t.id ? ' on' : ''),
+                    'data-testid': 'build-item-' + t.id,
                     onClick: () => selectTask(t.id),
                   },
                     h('div', { className: 'r1' },
@@ -1495,6 +1548,8 @@ window.__ModuleLoader__.load({
                       ' · ',
                       when(t.state && t.state.updated_at),
                     ),
+                    h('div', { className: 'agl-fine', 'data-testid': 'build-row-' + t.id },
+                      sourceWord(buildRow(t.id)) + ' · ' + levelWord(buildRow(t.id)) + ' · ' + ((buildRow(t.id) && buildRow(t.id).model) || '未知')),
                   )
                 }),
           ),
@@ -1592,14 +1647,13 @@ window.__ModuleLoader__.load({
                     ) : null,
                     h('div', { className: 'agl-fine', style: { marginTop: '8px' } },
                       h('div', null, '项目：' + projTitle(project)),
-                      h('div', null, '来源：' + (pipeline === null ? '读取中…' : !pipeline.ok ? '读取失败：' + pipeline.error : (SOURCE_TEXT[srcOf(detail.task)] || '旧任务：无来源记录'))),
+                      renderBuildFacts(detail.build || buildRow(detail.task), detail.task),
                       (() => {
                         const run = (detail.runs || []).slice(-1)[0]
                         if (!run || !(run.model_requested || run.model_resolved || run.provider)) return null
                         const models = [run.model_requested, run.model_resolved].filter(Boolean).join(' → ')
-                        return h('div', null, '模型：' + [models, run.provider].filter(Boolean).join(' · '))
-                      })(),
-                      h('div', null, 'T gate：未实现（核心尚未产出 T gate 记录）')),
+                        return h('div', null, '调用：' + [models, run.provider].filter(Boolean).join(' · '))
+                      })()),
                     detail.state ? h('div', { className: 'agl-fine', style: { marginTop: '8px' } },
                       'model ' + (detail.state.model || '—') + ' · effort ' + (detail.state.effort || '—') +
                       ' · switches ' + (detail.state.switches ?? 0) +
@@ -1651,6 +1705,7 @@ window.__ModuleLoader__.load({
           ),
         ),
       )
+      }
 
       return h('div', { className: 'agl-panel' },
         renderTop(),

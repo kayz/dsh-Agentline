@@ -94,7 +94,7 @@ function artifactFresh(dir, role, round, sinceMs) {
  */
 export async function executeRole({
   config, repo, taskId, role, round = 1, modelOverride, candidateOverride, effortOverride, log,
-  adapterFactory, health = null,
+  adapterFactory, health = null, observeIdentity = false,
 }) {
   const spec = ROLE_SPECS[role]
   const dir = path.join(repo, config.collabDir, taskId)
@@ -155,9 +155,13 @@ export async function executeRole({
     clearLive(dir)
     const endedAt = new Date()
 
+    const observed = typeof res.modelResolved === 'string' && res.modelResolved.trim() ? res.modelResolved.trim() : ''
     const record = {
       task: taskId, role, round, candidate: idx + 1, backend: provider.adapter,
-      model_requested: model.id, model_resolved: res.modelResolved || model.id,
+      model_requested: model.id,
+      // Build 步骤要求真实身份。flow 仍保持原来的回退，避免改变旧语义。
+      model_resolved: observeIdentity ? (observed || null) : (res.modelResolved || model.id),
+      ...(observeIdentity ? { model_resolved_source: observed ? 'adapter' : 'none' } : {}),
       provider: model.provider,
       effort, started_at: startedAt.toISOString(), ended_at: endedAt.toISOString(),
       duration_ms: endedAt - startedAt, exit: { code: res.exitCode },

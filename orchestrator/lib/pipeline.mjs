@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { readBuildBoard } from './build.mjs'
 
 const STATUS = new Set([
   'draft', 'designed', 'implemented', 'reviewable', 'reviewed',
@@ -80,6 +81,7 @@ export function readPipelineSummary(repo) {
       build: { status: counts.blocked ? 'blocked' : (counts.running ? 'running' : (counts.merged === counts.total && counts.total > 0 ? 'done' : 'idle')), counts },
     },
     tasks,
+    build: readBuildBoard(abs),
   }
 }
 

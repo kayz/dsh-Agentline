@@ -10,13 +10,13 @@ import path from 'node:path'
 import { executeRole, readVerdict } from './exec.mjs'
 import { readState, writeState } from './state.mjs'
 import { runCI } from './ci.mjs'
-import { effectiveRole } from './routing.mjs'
 import { commitAll, changedFiles, headSha } from './git.mjs'
 import { evaluateMerge } from './merge-policy.mjs'
 import { ensureTaskWorktree } from './worktree.mjs'
 import { acquireTaskLock, releaseTaskLock, acquireCapacity, releaseCapacity } from './registry.mjs'
 import { readWriteScope } from './scope.mjs'
 import { proveTermination } from './contracts/termination.mjs'
+import { configForStage, inspectOrigin, isInfraResult, recordStepStats, resolveStageRole } from './build.mjs'
 
 export const STEP_ORDER = ['design', 'dev', 'ci', 'review', 'pr']
 
@@ -57,40 +57,144 @@ function fail(reason) {
  * @param {object} [o.projectCfg]
  * @returns {Promise<{ok:boolean, step:string, status:string, next:string, model?:string, verdict?:string, reason?:string}>}
  */
+function identityGroup(config, modelId) {
+  const model = Object.values((config && config.models) || {}).find((item) => item && item.id === modelId)
+  if (!model) return null
+  if (typeof model.identity_group === 'string' && model.identity_group.trim()) return model.identity_group.trim()
+  const provider = config.providers && config.providers[model.provider]
+  const vendor = (provider && provider.source) || model.provider || ''
+  return vendor && model.id ? `${vendor}/${model.id}` : null
+}
+
+function wrapFactory(adapterFactory, { lock, onCall }) {
+  const base = adapterFactory || (() => null)
+  return (provider) => {
+    const adapter = base(provider)
+    if (!adapter || typeof adapter.run !== 'function') return adapter
+    return {
+      ...adapter,
+      async run(opts) {
+        if (lock && !lock.ids.includes(opts.model)) {
+          const denied = { exitCode: 1, error: 'role_lock', modelResolved: null }
+          onCall(opts, denied, true)
+          return denied
+        }
+        const result = await adapter.run(opts)
+        onCall(opts, result, false)
+        if (result && result.side_effects === 'unknown') {
+          return {
+            ...result,
+            exitCode: result.exitCode === 0 ? 1 : result.exitCode,
+            error: result.error || 'side_effects_unknown',
+            modelResolved: result.modelResolved ?? null,
+          }
+        }
+        if (lock && result && result.exitCode === 0 && !result.error) {
+          const resolved = typeof result.modelResolved === 'string' ? result.modelResolved.trim() : ''
+          if (!resolved) return { ...result, exitCode: 1, error: 'model_unverified', modelResolved: null }
+          if (resolved !== opts.model) return { ...result, exitCode: 1, error: 'model_mismatch', modelResolved: resolved }
+        }
+        return result
+      },
+    }
+  }
+}
+
 export async function runStep({
   config, repo, taskId, step, runnerPath, adapterFactory, log = console.log, projectCfg = {},
 }) {
   const taskDir = path.join(repo, config.collabDir, String(taskId))
   if (!fs.existsSync(taskDir)) return fail('task_dir_missing')
+  const origin = inspectOrigin(repo, taskDir)
+  if (!origin.ok) {
+    const current = readState(taskDir)
+    return {
+      ok: false, reason: origin.reason, detail: origin.detail, step: step || null,
+      status: current && current.status ? current.status : null, next: 'blocked',
+    }
+  }
   let st = readState(taskDir)
-  if (!st) st = setStatus(taskDir, taskId, 'draft', 'step:init')
-
-  if (st.status === 'pr_open' || st.status === 'merged') {
+  if (st && (st.status === 'pr_open' || st.status === 'merged')) {
     return { ok: true, step: 'done', status: st.status, next: 'done' }
   }
-  if (st.status === 'blocked' && !step) return fail(st.blocked_reason || 'blocked')
+  if (st && st.status === 'blocked' && !step) return fail(st.blocked_reason || 'blocked')
+  const chosen = step || nextStep(st || { status: 'draft' })
+  const calls = []
+  const note = (stage, modelId) => (opts, result, denied) => {
+    calls.push({
+      role: stage,
+      model_requested: opts && opts.model,
+      model_resolved: result && typeof result.modelResolved === 'string' && result.modelResolved.trim() ? result.modelResolved.trim() : null,
+      identity_group: identityGroup(config, (result && result.modelResolved) || (opts && opts.model)),
+      infra: !denied && isInfraResult(result),
+      side_effects: result && result.side_effects || null,
+      denied: !!denied,
+      error: result && result.error || null,
+      exit: result && result.exitCode,
+    })
+    appendStepEvent(taskDir, {
+      event: 'call', role: stage, denied: !!denied,
+      model_requested: opts && opts.model,
+      model_resolved: result && typeof result.modelResolved === 'string' && result.modelResolved.trim() ? result.modelResolved.trim() : null,
+      identity_group: identityGroup(config, (result && result.modelResolved) || null),
+      infra: !denied && isInfraResult(result),
+      side_effects: result && result.side_effects || null,
+      error: result && result.error || null,
+      exit: result && result.exitCode,
+    })
+  }
+  const prepare = (stage) => {
+    const resolved = resolveStageRole(config, projectCfg, stage, taskDir)
+    if (!resolved.ok) return { ok: false, resolved }
+    return {
+      ok: true,
+      resolved,
+      runConfig: configForStage(config, stage, resolved),
+      factory: wrapFactory(adapterFactory, { lock: resolved.lock, onCall: note(stage) }),
+    }
+  }
+  if (chosen === 'design' || chosen === 'dev' || chosen === 'review') {
+    const ready = prepare(chosen)
+    if (!ready.ok) {
+      return {
+        ok: false, reason: ready.resolved.reason, detail: ready.resolved.detail, step: chosen,
+        status: st && st.status ? st.status : null, next: 'blocked',
+      }
+    }
+  }
+  if (!st) st = setStatus(taskDir, taskId, 'draft', 'step:init')
 
-  const chosen = step || nextStep(st)
-  const runRole = (opts) => executeRole({ ...opts, adapterFactory, log })
+  const finish = (stage, result) => {
+    recordStepStats(taskDir, stage, calls, result)
+    return result
+  }
 
   if (chosen === 'design') {
     if (st.status !== 'draft') return fail('expected draft')
-    const eff = effectiveRole(config, 'design', projectCfg)
-    const r = await runRole({ config, repo, taskId, role: 'design', round: 1, candidateOverride: eff.order, effortOverride: eff.effort })
-    if (!r.ok) return fail(r.state.blocked_reason)
+    const ready = prepare('design')
+    const r = await executeRole({
+      config: ready.runConfig, repo, taskId, role: 'design', round: 1,
+      candidateOverride: ready.resolved.order, effortOverride: ready.resolved.effort,
+      adapterFactory: ready.factory, log, observeIdentity: !!ready.resolved.lock,
+    })
+    if (!r.ok) return finish(chosen, fail(r.state.blocked_reason))
     await commitAll(repo, `stage(design): task ${taskId}`)
     const next = setStatus(taskDir, taskId, 'designed', 'step:design')
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, record: r.record }
+    return finish(chosen, { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, record: r.record })
   }
 
   if (chosen === 'dev') {
     if (st.status !== 'designed') return fail('expected designed')
-    const eff = effectiveRole(config, 'dev', projectCfg)
-    const r = await runRole({ config, repo, taskId, role: 'dev', round: 1, candidateOverride: eff.order, effortOverride: eff.effort })
-    if (!r.ok) return fail(r.state.blocked_reason)
+    const ready = prepare('dev')
+    const r = await executeRole({
+      config: ready.runConfig, repo, taskId, role: 'dev', round: 1,
+      candidateOverride: ready.resolved.order, effortOverride: ready.resolved.effort,
+      adapterFactory: ready.factory, log, observeIdentity: !!ready.resolved.lock,
+    })
+    if (!r.ok) return finish(chosen, fail(r.state.blocked_reason))
     await commitAll(repo, `stage(dev): task ${taskId}`)
     const next = setStatus(taskDir, taskId, 'implemented', 'step:dev')
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, record: r.record }
+    return finish(chosen, { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, record: r.record })
   }
 
   if (chosen === 'ci') {
@@ -99,32 +203,36 @@ export async function runStep({
     const ci = await runCI({ repo, taskDirRel: path.join(config.collabDir, String(taskId)), runnerPath, outPath: path.join(taskDir, 'ci-results.json') })
     if (!ci.ok) {
       const next = setStatus(taskDir, taskId, 'blocked', 'step:ci', { blocked_reason: 'ci_failed' })
-      return { ok: false, step: chosen, status: next.status, next: 'blocked', reason: 'ci_failed' }
+      return finish(chosen, { ok: false, step: chosen, status: next.status, next: 'blocked', reason: 'ci_failed' })
     }
     const next = setStatus(taskDir, taskId, 'reviewable', 'step:ci')
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next) }
+    return finish(chosen, { ok: true, step: chosen, status: next.status, next: nextStep(next) })
   }
 
   if (chosen === 'review') {
     if (st.status !== 'reviewable') return fail('expected reviewable')
+    const ready = prepare('review')
     const devModelId = st.model
-    const revEff = effectiveRole(config, 'review', projectCfg)
-    const reviewModel = revEff.order.find((k) => config.models[k] && config.models[k].id !== devModelId)
-    if (!reviewModel) return fail('no_candidate')
+    const order = ready.resolved.order.filter((k) => config.models[k] && config.models[k].id !== devModelId)
+    if (!order.length) return fail('no_candidate')
     const round = Number(st.review_round || 1)
-    const r = await runRole({ config, repo, taskId, role: 'review', round, modelOverride: reviewModel, effortOverride: revEff.effort })
-    if (!r.ok) return fail(r.state.blocked_reason)
+    const r = await executeRole({
+      config: ready.runConfig, repo, taskId, role: 'review', round,
+      candidateOverride: order, effortOverride: ready.resolved.effort,
+      adapterFactory: ready.factory, log, observeIdentity: !!ready.resolved.lock,
+    })
+    if (!r.ok) return finish(chosen, fail(r.state.blocked_reason))
     const verdict = readVerdict(taskDir, round)
     await commitAll(repo, `stage(review-r${round}): ${verdict?.verdict || 'unknown'} (task ${taskId})`)
     if (verdict?.verdict === 'pass') {
       const next = setStatus(taskDir, taskId, 'reviewed', 'step:review', { review_round: round })
-      return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: 'pass', record: r.record }
+      return finish(chosen, { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: 'pass', record: r.record })
     }
     const next = setStatus(taskDir, taskId, 'reviewable', 'step:review', {
       review_round: round + 1,
       review_feedback: verdict?.verdict || 'needs_revision',
     })
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: verdict?.verdict || 'needs_revision', record: r.record }
+    return finish(chosen, { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: verdict?.verdict || 'needs_revision', record: r.record })
   }
 
   if (chosen === 'pr') {
@@ -138,7 +246,7 @@ export async function runStep({
       merge_risk: mergeRisk,
     })
     await commitAll(repo, `chore(${taskId}): pr_open state`)
-    return { ok: true, step: chosen, status: next.status, next: 'done', verdict: 'pass' }
+    return finish(chosen, { ok: true, step: chosen, status: next.status, next: 'done', verdict: 'pass' })
   }
 
   return fail(`unknown step: ${chosen}`)
@@ -210,6 +318,10 @@ export async function runBuild({
         return { ok: true, status: st?.status || 'done', next: 'done', steps: completed, repo: runRepo }
       }
       if (step === 'resume') {
+        if (st?.side_effects === 'unknown') {
+          appendStepEvent(runDir, { event: 'resume.refused', task: taskId, reason: 'side_effects_unknown' })
+          return { ok: false, status: 'blocked', next: 'resume', reason: 'side_effects_unknown', steps: completed, repo: runRepo }
+        }
         if (st?.blocked_reason !== 'interrupted') {
           return { ok: false, status: 'blocked', next: 'resume', reason: st?.blocked_reason || 'blocked', steps: completed, repo: runRepo }
         }
@@ -252,7 +364,7 @@ export async function runBuild({
         model: r.model || null, run_ref: (r.record && r.record.log_ref) || null,
       })
       completed.push(r)
-      if (!r.ok) return { ok: false, status: r.status, next: r.next, reason: r.reason, steps: completed, repo: runRepo }
+      if (!r.ok) return { ok: false, status: r.status, next: r.next, reason: r.reason, detail: r.detail || null, steps: completed, repo: runRepo }
     }
     const st = readState(runDir)
     return { ok: false, status: st?.status || 'unknown', next: nextStep(st), reason: 'step_budget_exceeded', steps: completed, repo: runRepo }
