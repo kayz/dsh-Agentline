@@ -14,4 +14,12 @@ node_modules/
 .collab/tasks/001/notice.json
 .collab/tasks/001/live.json
 .collab/tasks/001/ci-results.json
+!.collab/tasks/002/
+!.collab/tasks/002/**
+.collab/tasks/002/logs/
+.collab/tasks/002/run.json
+.collab/tasks/002/state.json
+.collab/tasks/002/notice.json
+.collab/tasks/002/live.json
+.collab/tasks/002/ci-results.json
 *.log
