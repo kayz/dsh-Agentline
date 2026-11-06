@@ -1,0 +1,219 @@
+{
+  "blocking_questions": [
+    {
+      "id": "Q1_CONTROL_PLANE_BOUNDARY",
+      "question": "Studio/Blueprint 控制面落在哪里，是否保持 SCOPE.md 的“Build 单任务内核”边界？",
+      "why": "输入要求“AgentLine 核心有正式命令和状态机”，但 SCOPE.md 与 docs/03 将 Studio/Blueprint 定义为内核外的上游控制面。未裁定前，命令、目录、Host 路由及插件调用边界无法定稿。",
+      "options": [
+        {
+          "id": "A",
+          "label": "同仓分层：在 orchestrator/ 新增与 flow.mjs 平级解耦的 studio.mjs、blueprint.mjs，通过 agentline.mjs studio|blueprint 暴露；flow 保持零侵入，插件只调用公开 CLI"
+        },
+        {
+          "id": "B",
+          "label": "独立 pipeline-cli 控制面包，插件分别调用控制面 CLI 与现有 Build CLI"
+        },
+        {
+          "id": "C",
+          "label": "修改 SCOPE.md，将 AgentLine 正式扩展为三阶段全周期调度器"
+        }
+      ],
+      "default": "A",
+      "source": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "Q2_RELEASE_SEQUENCE",
+      "question": "0.18–0.21 按哪条路线切分，首个最小切片是什么？",
+      "why": "专家 A 主张先解决 Build 错误规则化和 Inbox，专家 B 主张先交付能力查询、只读 summary、版本化契约和真实模型身份；两者对 Studio 的起始版本也不同。",
+      "options": [
+        {
+          "id": "A",
+          "label": "0.18 做 Build 结构化错误与动作表、rate_limit 自动续跑、Build Inbox、核心 pipeline summary；0.19 做 tiers/probe/preflight、Blueprint gate 校验器和手工产物导入；0.20 做 Blueprint 编排；Studio 后置"
+        },
+        {
+          "id": "B",
+          "label": "0.18 做能力查询、只读 pipeline summary、版本化 DTO 和模型身份展示；0.19 做 Studio 最小闭环；0.20 做 Blueprint；0.21 做 Build 集成"
+        },
+        {
+          "id": "C",
+          "label": "保持输入原路线，0.18 先做三阶段只读外壳，未实现阶段明确显示 unsupported/not_started"
+        }
+      ],
+      "default": "A",
+      "source": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "Q3_TOP_MODEL_SUPPLY",
+      "question": "Studio/Blueprint 的顶级模型名单和本机角色分配如何确定？",
+      "why": "当前 claude-opus-5-5、gpt-6.1-sol、claude-opus-4-5 只是候选字符串，不能证明档位或可调用性；现有组合也未必满足 Blueprint 三角色两两不同及评审跨厂商要求。",
+      "options": [
+        {
+          "id": "A",
+          "label": "tiers.top 仅纳入 claude-opus-5-5 与 gpt-6.1-sol；设计师和评审各用一个，测试架构师复用其中之一，跨厂商偏好仅警告"
+        },
+        {
+          "id": "B",
+          "label": "先接入并验证 gemini/codebuddy 的顶级模型，通过身份与 callable probe 后再启动 Blueprint 编排；此前只做 Build 加固和 gate 校验"
+        },
+        {
+          "id": "C",
+          "label": "放宽协议，允许同厂商不同模型担任评审，每次记录 deviations"
+        }
+      ],
+      "default": "A",
+      "source": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "Q4_MODEL_IDENTITY_EVIDENCE",
+      "question": "CLI 无法提供可信的实际模型身份时，是否允许参与要求模型隔离的阶段？",
+      "why": "当前 adapter 的 model_resolved 不能普遍证明实际执行模型；若接受请求参数作为证明，会削弱禁止静默降级和角色隔离承诺。",
+      "options": [
+        {
+          "id": "strict",
+          "label": "不允许，返回 blocked(model_unverified)；身份未知不得补成请求模型"
+        },
+        {
+          "id": "explicit_exception",
+          "label": "允许人工登记的固定版本例外，持续显示 unverified，且不得宣称实际隔离已验证"
+        }
+      ],
+      "default": "strict",
+      "source": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "Q5_ROUND_LIMIT_OVERRIDE",
+      "question": "Blueprint 三轮不收敛后，硬停止还是允许显式授权追加轮次？",
+      "why": "专家 A 使用 awaiting_user 并允许每次授权追加一轮；专家 B 推荐原会话最多三轮，超限为 blocked + E_ROUND_LIMIT，用户裁决后建立有来源关联的新会话。状态、计数和 resume 语义必须统一。",
+      "options": [
+        {
+          "id": "hard_limit",
+          "label": "原会话最多三轮；用户裁决或修订输入后建立有来源关联的新会话"
+        },
+        {
+          "id": "bounded_extension",
+          "label": "允许一次追加一轮，记录授权、原因和新增预算，最多四轮"
+        },
+        {
+          "id": "repeatable_single_round",
+          "label": "进入 awaiting_user，每次只能显式授权追加一轮，并逐次记录 deviations"
+        }
+      ],
+      "default": "hard_limit",
+      "source": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "Q6_COLLAB_GIT_RETENTION",
+      "question": "Studio/Blueprint 的讨论轮次、用户回答和原始 CLI 日志是否进入产品仓库 git 历史？",
+      "why": "当前流程可能把 .collab/ 随任务分支提交并合入 main；过程记录可能包含商业决策、废弃方案和完整代码上下文，需要同时确定泄露边界与恢复审计方式。",
+      "options": [
+        {
+          "id": "A",
+          "label": "分级留存：定稿契约、状态、运行和 verdict 文件随 git 提交；logs/、rounds/、handoff/ 等过程原始记录外置或 gitignore，本地保留哈希索引"
+        },
+        {
+          "id": "B",
+          "label": "全部讨论轮次与日志进入产品仓库 git，仅用于纯内部私有仓库"
+        },
+        {
+          "id": "C",
+          "label": "整个 .collab/ 都不进入产品仓库 git，统一存放到工作区外的控制面数据目录"
+        }
+      ],
+      "default": "A",
+      "source": [
+        "C"
+      ]
+    }
+  ],
+  "assumptions": [
+    "blocking_questions 中的 default 仅保留专家推荐，不视为用户已经拍板。",
+    "三位专家均反对把 Studio/Blueprint 塞进现有单任务 flow 或插件 Host；待裁决的是独立控制面的具体落点。",
+    "插件不得成为第二套 orchestrator：业务状态、gate、错误动作和审批由控制面或核心写入，插件只做展示、输入收集和公开命令调用。",
+    "本机 CLI 安装、认证、版本、模型可调用性及实际模型上报能力尚未完成动态验证。",
+    "本轮新增命令、字段、错误码、状态机和 gate 均为建议契约，不代表现有代码已经支持。"
+  ],
+  "conflicts": [
+    {
+      "topic": "Studio/Blueprint 的控制面归属",
+      "positions": {
+        "A": "阶段状态机、gate、错误策略和正式命令归 AgentLine 核心，provider 层位于核心之下，插件只读状态并调用 CLI。",
+        "B": "AgentLine 提供统一入口，但 Studio/Blueprint 应由独立控制面模块实现；公共运行层、控制面与 Build 单任务内核分层。",
+        "C": "SCOPE.md 与输入存在直接冲突；推荐 orchestrator 同仓新增平级 studio.mjs、blueprint.mjs，保持 flow 零侵入。"
+      },
+      "why_it_matters": "决定是否修改 SCOPE、是否新增独立包，以及插件、CLI、Build 内核之间唯一的写入和调用边界。"
+    },
+    {
+      "topic": "版本顺序与首个最小切片",
+      "positions": {
+        "A": "先交付 Build 错误规则化、自动恢复和 Inbox，再做 Blueprint 校验器与手工导入，Studio 最后。",
+        "B": "0.18 先交付能力查询、只读 summary、版本化 DTO、Build gate 详情和模型身份；0.19 即开始 Studio 最小闭环。",
+        "C": "可见内容要求先裁断控制面落点，再启动 0.18–0.20 的路由与目录契约；未见完整独立路线。"
+      },
+      "why_it_matters": "决定下一版究竟优先降低 Build 运维成本，还是先建立三阶段公共契约，避免并行形成两套状态与接口。"
+    },
+    {
+      "topic": "轮次耗尽的状态和追加授权",
+      "positions": {
+        "A": "达到上限进入 awaiting_user，可 accept_current、user_decide、authorize_extra_round(1) 或 abandon，并记录偏离。",
+        "B": "轮次耗尽统一为 blocked + E_ROUND_LIMIT + requires_user=true；推荐三轮硬停，备选只允许追加一次、最多四轮。",
+        "C": "可见文本未给出独立的轮次状态方案。"
+      },
+      "why_it_matters": "影响状态机、UI 按钮、resume 是否可重置计数、预算审计和偏离记录。"
+    },
+    {
+      "topic": "错误分类后的自动动作与上限",
+      "positions": {
+        "A": "invalid_output 硬停且不重试；rate_limit 可在 reset_at 不超过 30 分钟时等待续跑；ci_failed 沿用现有 review-repair 轮次。",
+        "B": "协议完成但业务 JSON 不合格时允许一次纯格式修复；rate_limit 最多重试两次、单次等待不超过 60 秒且累计不超过 120 秒；CI 只允许一次开发修复；每个逻辑操作最多三次模型调用。",
+        "C": "可见内容强调外部 CLI 故障面扩大、恢复清场和进程现场风险，未见完整动作表。"
+      },
+      "why_it_matters": "若错误码相同却对应不同重试、等待和修复规则，自动恢复仍不可预测，也无法统一预算与审计。"
+    },
+    {
+      "topic": "Blueprint 模型角色约束与例外",
+      "positions": {
+        "A": "B6 要求设计师、评审、测试架构师的 model_resolved 两两不同，但 Q1 默认方案又允许测试架构师复用前两者的模型。",
+        "B": "Blueprint 三角色均须 top 且模型两两不同；实际身份未知时默认 model_unverified 阻塞，不能用请求模型替代证明。",
+        "C": "可见内容指出 Codex 实际模型解析缺失等现有隐患，未给出独立角色例外方案。"
+      },
+      "why_it_matters": "同一 preflight 可能出现互相矛盾的通过与阻塞条件，直接影响 Q3 默认方案是否可执行。"
+    }
+  ],
+  "agenda_next": [
+    "先裁断 Q1：确认 SCOPE 是否不变，并固定控制面模块、CLI 子命令、状态写入者和插件调用边界。",
+    "再裁断 Q2：选定 0.18 最小切片及各版放行标准，明确 Studio 是否后置，避免先做无数据的三阶段页面。",
+    "对四个 provider 做只读能力核查：安装、版本、认证、协议能力、实际模型上报和 probe；据此处理 Q3、Q4 并冻结 model-policy。",
+    "合并错误动作表：统一结构化错误码、403/quota/session/rate_limit 分类、等待阈值、invalid_output 与 CI 修复次数、统一切换和调用预算。",
+    "统一状态与 gate 契约：awaiting_user/blocked 的边界、轮次耗尽、软规则豁免、subject_digest 审批、allowed_actions、revision 与退出码，并裁断 Q5。",
+    "裁断 Q6，列出哪些 .collab 产物进入 git、哪些外置，以及外置证据的哈希和恢复校验方式。",
+    "最后冻结 Blueprint→Build 任务包与幂等导入契约，并为重复请求、进程中断、未知模型、过期审批、解析漂移和轮次耗尽定义失败路径验收。"
+  ],
+  "audit_flags": [
+    "专家 C 的输入在中途被截断；本输出仅使用其可见判断和两个裁决问题，未推断缺失部分的观点。",
+    "A 的 B6“三角色模型两两不同”与其 Q1 默认方案“测试架构师复用其中之一”直接矛盾，必须在 preflight 定稿前消除。",
+    "exec.mjs 以 res.modelResolved || model.id 回退，Codex 可返回 null，Gemini 直接回显请求模型；现有 model_resolved 不能统一作为真实身份证据。",
+    "错误分类仍含子串误匹配风险，且 quota、session limit、429 被合并，裸 403 未独立分类；结构化 provider 错误码应先于文本兜底。",
+    "Host 当前存在 GET 触发恢复写状态、flow 或停止操作的路径，与“只读驾驶舱”不符；写操作需统一 POST，并补幂等键和 expected_revision。",
+    "interrupted 恢复路径存在默认丢弃未提交改动的风险；未知副作用、进程树未停止或交班失败时不得自动重放。",
+    "合并入口尚未执行完整证据检查；新增 gate 必须进入 pr_open、merged 和执行路径，不能只作为 UI 展示。",
+    "routing.catalog() 的 backend/provider 字段契约不一致，应通过版本化 schema 和契约测试消除。",
+    "当前 .collab 提交行为与 C 提出的过程日志暴露风险冲突，需在 Q6 后调整提交边界。",
+    "Build 当前最后一次 review reject 后仍可能继续修复再报 exhausted；应与最终选定的评审轮次和 E_REVIEW_REJECTED 规则对齐。"
+  ]
+}

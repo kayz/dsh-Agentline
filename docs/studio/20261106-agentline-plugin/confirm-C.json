@@ -1,0 +1,20 @@
+{
+  "voice": "C",
+  "status": "accept_with_notes",
+  "captured": [
+    "三阶段方向成立，但 SCOPE.md/docs/03（内核只管单任务 Build，Studio/Blueprint 不属于内核）与 input.md（核心需有正式命令和状态机）存在致命架构边界冲突，必须先裁断再动工",
+    "严禁将 Studio/Blueprint 塞进 flow.mjs（runFlow）或插件 Host；建议同仓分层，在 orchestrator/ 下新增与 flow.mjs 平级解耦的 studio.mjs / blueprint.mjs，通过 agentline studio|blueprint 暴露，Build 内核零侵入，插件只做无状态投影与意图转发",
+    "三阶段将外部 CLI 故障面从 3 个角色槽位放大到 11 个（横跨 4 个 CLI），现有 OAuth refresh token 轮换互踢、输出正则看门狗误杀、恢复时默认清空未提交改动、Codex 实际模型解析缺失等隐患会被放大",
+    "Q1 控制面边界裁决项（未锁定落点前 0.18–0.20 路由与目录契约无法开工，含 A 同仓分层 / B 独立 pipeline-cli / C 修改 SCOPE.md 三选项及默认 A）",
+    "Q2（纪要 Q6）Studio/Blueprint 讨论记录、用户回答与原始 CLI 日志的 Git 留存边界及数据暴露风险（含 A 分级留存+本地哈希索引 / B 全量进 Git / C 全量外置三选项及默认 A）"
+  ],
+  "missing": [
+    "无（注：expert-C.md 原始输出在传输中被截断 28267 bytes，中间关于四个特例化问题的展开及部分细节未能落盘；纪要已完整覆盖 expert-C.md 的全部可见部分，并在第 4、7、9 节如实说明仅使用可见判断而未做臆测推断）"
+  ],
+  "distorted": [
+    "无"
+  ],
+  "blocking": [
+    "无"
+  ]
+}

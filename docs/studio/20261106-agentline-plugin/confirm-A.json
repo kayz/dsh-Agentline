@@ -1,0 +1,30 @@
+```json
+{
+  "voice": "A",
+  "status": "accept_with_notes",
+  "captured": [
+    "方向正确，但路线顺序反了：0.18 不应先做三阶段只读外壳，核心状态机和结构化错误要排在 Studio/Blueprint UI 之前",
+    "用户界面以“待我处理”Inbox 加一条阶段进度条为中心；每条是一个问题、默认选项和证据链接，内部轮次默认收起",
+    "现有错误分类靠子串匹配，不够当规则引擎的底座；rate_limit 触发换候选，与 Studio/Blueprint 禁止静默降级冲突",
+    "当前配置撑不起 Blueprint 的角色隔离（design/review 同厂商，4-5 不算顶级），做 UI 之前要由用户先决定模型供应",
+    "核心/插件边界：核心拥有所有改变下一步行为的状态（阶段状态机、gate、错误码/next_action、model_resolved/tier、用户决定落盘），插件只呈现并调用公开 CLI；provider 层在核心下",
+    "G0 S1–S6、G1 B1–B7、Build 完成和 G2 条件；批准绑定内容哈希（B7）；pass = checks 全部通过或被 waiver 覆盖，不可豁免项不能 waiver",
+    "错误处理：invalid_output 硬停；rate_limit 在 reset ≤30min 时等待后续跑",
+    "Q2 选项 A 的版本切分（0.18 Build 错误规则化/动作表/rate_limit 续跑/Inbox/pipeline summary 下沉；0.19 tiers/probe/G1 校验器/手工产物导入；0.20 Blueprint 编排；Studio 后置）",
+    "Q3 选项 A：top 只放 claude-opus-5-5 和 gpt-6.1-sol，测试架构师复用其中之一，跨厂商只警告",
+    "审计指出 B6“三角色两两不同”与默认方案“测试架构师复用”直接矛盾，这一点属实"
+  ],
+  "missing": [
+    "插件的四条硬约束：插件代码不得写 .collab/**（可在 CI 用 grep 拦截）；一个按钮只对应一条核心 CLI 命令，不做多步编排；插件里不得有自动恢复的策略代码；Home 只读核心的 pipeline summary",
+    "gate 文件不存在时阶段徽章显示“未评估”，不显示“进行中”；徽章只有 gate.pass 一个数据源",
+    "同一错误码在同一任务里连续出现 3 次，就升级为 blocked(repeated:<code>)；model_mismatch 硬停（resolved ∉ tiers.top）",
+    "风险：豁免一旦常态化，gate 就失去意义；对策是先跑 preflight，看本机实际能满足几条规则，再决定协议是否放宽",
+    "0.19 还包含 stage preflight，以及 task-graph → brief.md 导入命令；Studio 第一版可以只是“导入 decisions.json → 用户逐项确认”；9 角色配置 UI 改成每阶段一个 preflight 结果面板"
+  ],
+  "distorted": [
+    "第 2 节 A 条目（第 19 行）写“quota/session/429 混为 rate_limit，裸 403 未识别”。session/429/裸 403 是 B 的表述；A 原文说的是 'context' 排在 auth 前、'auth' 能匹配到 author、quota 与 rate_limit 被归为一类、capacity/stall/timeout/transport/run_failed 没有对应动作",
+    "第 4 节轮次耗尽 A 列写“可授权加 1 轮”，容易读成只能加一次（bounded_extension）。A 原意是每次授权只加 1 轮、可以重复授权、每次都写进 deviations.json，对应 Q5 的 repeatable_single_round"
+  ],
+  "blocking": ["无"]
+}
+```
