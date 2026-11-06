@@ -39,8 +39,8 @@ function passReport(ranAt) {
     total: 2,
     ok: true,
     results: [
-      { id: 'AC-1', passed: true },
-      { id: 'AC-2', passed: true },
+      { id: 'AC-1', passed: true, exitCode: 0, lastLine: 'AC-1 OK' },
+      { id: 'AC-2', passed: true, exitCode: 0, lastLine: 'AC-2 OK' },
     ],
   }
   if (ranAt !== undefined) report.ranAt = ranAt
@@ -128,6 +128,49 @@ test('explicit CI failure fails and a complete fresh report passes', (t) => {
   assert.equal(ok.pass, true)
   assert.equal(ok.evidence, 'pass')
 
+  const fresh = new Date(Date.now() + 60_000).toISOString()
+  writeCi(taskDir, {
+    ranAt: fresh,
+    passed: 2,
+    total: 2,
+    ok: true,
+    results: [
+      { id: 'AC-1', passed: true, exitCode: 1, lastLine: 'AC-1 OK' },
+      { id: 'AC-2', passed: true, exitCode: 0, lastLine: 'AC-2 OK' },
+    ],
+  })
+  const exitClash = ciCheck(repo, taskDir)
+  assert.equal(exitClash.pass, false)
+  assert.equal(exitClash.evidence, 'unknown:undetermined')
+
+  writeCi(taskDir, {
+    ranAt: fresh,
+    passed: 2,
+    total: 2,
+    ok: true,
+    results: [
+      { id: 'AC-1', passed: true, exitCode: 0, lastLine: 'not the marker' },
+      { id: 'AC-2', passed: true, exitCode: 0, lastLine: 'AC-2 OK' },
+    ],
+  })
+  const lineClash = ciCheck(repo, taskDir)
+  assert.equal(lineClash.pass, false)
+  assert.equal(lineClash.evidence, 'unknown:undetermined')
+
+  writeCi(taskDir, {
+    ranAt: fresh,
+    passed: 2,
+    total: 2,
+    ok: true,
+    results: [
+      { id: 'AC-1', passed: true, exitCode: 0, lastLine: 'AC-1 OK', output: 'AC-1 OK\nfailed' },
+      { id: 'AC-2', passed: true, exitCode: 0, lastLine: 'AC-2 OK', output: 'AC-2 OK' },
+    ],
+  })
+  const outputClash = ciCheck(repo, taskDir)
+  assert.equal(outputClash.pass, false)
+  assert.equal(outputClash.evidence, 'unknown:undetermined')
+
   writeCi(taskDir, passReport(undefined))
   const noTime = ciCheck(repo, taskDir)
   assert.equal(noTime.pass, false)
@@ -160,6 +203,15 @@ test('CI older than HEAD and a verdict that is not an ancestor are stale', (t) =
   const verdict = evaluateBuildGate(repo, taskDir).gate.checks.find((item) => item.id === 'T.verdict_pass')
   assert.equal(verdict.pass, false)
   assert.equal(verdict.evidence, 'stale')
+
+  const parent = git(repo, ['rev-parse', 'HEAD']).trim()
+  fs.writeFileSync(path.join(repo, 'later.txt'), 'later\n', 'utf8')
+  git(repo, ['add', '-A'])
+  git(repo, ['commit', '-qm', 'after review'])
+  fs.writeFileSync(path.join(taskDir, 'verdict.json'), JSON.stringify({ verdict: 'pass', git_sha: parent }))
+  const moved = evaluateBuildGate(repo, taskDir).gate.checks.find((item) => item.id === 'T.verdict_pass')
+  assert.equal(moved.pass, false)
+  assert.equal(moved.evidence, 'stale')
 })
 
 test('non-waivable CI failure cannot be waived and a consistent gate can pass', (t) => {

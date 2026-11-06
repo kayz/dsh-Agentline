@@ -249,4 +249,20 @@ test('failed and infra calls without identity do not pass isolation', (t) => {
   ])
   assert.equal(isolation().pass, true)
   assert.equal(isolation().evidence, 'pass')
+
+  fs.writeFileSync(path.join(taskDir, 'step-ledger.jsonl'), [
+    JSON.stringify(dev),
+    '{not-json',
+    JSON.stringify(review),
+  ].join('\n') + '\n', 'utf8')
+  assert.equal(isolation().pass, false)
+  assert.equal(isolation().evidence, 'unknown:identity')
+
+  fs.writeFileSync(path.join(taskDir, 'run.json'), JSON.stringify([
+    { role: 'dev', model_requested: 'model-a', model_resolved: 'model-a', model_resolved_source: 'adapter', identity_group: 'anthropic/model-a' },
+    { role: 'review', model_requested: 'model-b', model_resolved: 'model-b', model_resolved_source: 'adapter', identity_group: 'openai/model-b' },
+  ]), 'utf8')
+  fs.writeFileSync(path.join(taskDir, 'step-ledger.jsonl'), '{\n', 'utf8')
+  assert.equal(isolation().pass, false)
+  assert.equal(isolation().evidence, 'unknown:identity')
 })

@@ -299,21 +299,24 @@ export function recordStepStats(taskDir, step, calls, result) {
 
 function readLedger(taskDir) {
   const file = path.join(taskDir, 'step-ledger.jsonl')
-  if (!fs.existsSync(file)) return []
-  const parsed = readJsonText(file)
-  if (!parsed.ok) return []
-  return parsed.lines
-}
-
-function readJsonText(file) {
-  try {
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => {
-      try { return JSON.parse(line) } catch { return null }
-    }).filter(Boolean)
-    return { ok: true, lines }
-  } catch (e) {
-    return { ok: false, error: e && e.message ? e.message : String(e), lines: [] }
+  if (!fs.existsSync(file)) return { present: false, corrupt: false, lines: [] }
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch {
+    return { present: true, corrupt: true, lines: [] }
   }
+  const lines = []
+  let corrupt = false
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    try {
+      const row = JSON.parse(line)
+      if (!isObject(row)) corrupt = true
+      else lines.push(row)
+    } catch {
+      corrupt = true
+    }
+  }
+  return { present: true, corrupt, lines }
 }
 
 function readRuns(taskDir) {
@@ -323,35 +326,44 @@ function readRuns(taskDir) {
   return isObject(parsed.value) ? [parsed.value] : []
 }
 
-function callsFromDisk(taskDir) {
-  const ledger = readLedger(taskDir).filter((row) => row && row.event === 'call' && !row.denied)
-  if (ledger.length) {
-    return ledger.map((row) => ({
-      role: row.role || null,
-      model_requested: row.model_requested || null,
-      model_resolved: typeof row.model_resolved === 'string' && row.model_resolved.trim() ? row.model_resolved.trim() : null,
-      identity_group: typeof row.identity_group === 'string' ? row.identity_group : null,
-      infra: !!row.infra,
-      error: row.error || null,
-      exit: row.exit,
-      source: row.model_resolved ? 'adapter' : 'none',
-    }))
+function mapLedgerCall(row) {
+  return {
+    role: row.role || null,
+    model_requested: row.model_requested || null,
+    model_resolved: typeof row.model_resolved === 'string' && row.model_resolved.trim() ? row.model_resolved.trim() : null,
+    identity_group: typeof row.identity_group === 'string' ? row.identity_group : null,
+    infra: !!row.infra,
+    error: row.error || null,
+    exit: row.exit,
+    source: row.model_resolved ? 'adapter' : 'none',
   }
-  return readRuns(taskDir).map((row) => {
-    const source = row.model_resolved_source || null
-    const resolved = typeof row.model_resolved === 'string' && row.model_resolved.trim() ? row.model_resolved.trim() : null
-    const forged = !source && resolved && resolved === row.model_requested
-    return {
-      role: row.role || null,
-      model_requested: row.model_requested || null,
-      model_resolved: source === 'none' || forged ? null : resolved,
-      identity_group: typeof row.identity_group === 'string' ? row.identity_group : null,
-      infra: false,
-      error: row.error || null,
-      exit: row.exit && row.exit.code,
-      source: source || (forged ? 'none' : (resolved ? 'adapter' : 'none')),
-    }
-  })
+}
+
+function callsFromDisk(taskDir) {
+  const ledger = readLedger(taskDir)
+  if (ledger.present && ledger.corrupt) return { corrupt: true, calls: [] }
+  if (ledger.present) {
+    const calls = ledger.lines.filter((row) => row && row.event === 'call' && !row.denied).map(mapLedgerCall)
+    if (calls.length) return { corrupt: false, calls }
+  }
+  return {
+    corrupt: false,
+    calls: readRuns(taskDir).map((row) => {
+      const source = row.model_resolved_source || null
+      const resolved = typeof row.model_resolved === 'string' && row.model_resolved.trim() ? row.model_resolved.trim() : null
+      const forged = !source && resolved && resolved === row.model_requested
+      return {
+        role: row.role || null,
+        model_requested: row.model_requested || null,
+        model_resolved: source === 'none' || forged ? null : resolved,
+        identity_group: typeof row.identity_group === 'string' ? row.identity_group : null,
+        infra: false,
+        error: row.error || null,
+        exit: row.exit && row.exit.code,
+        source: source || (forged ? 'none' : (resolved ? 'adapter' : 'none')),
+      }
+    }),
+  }
 }
 
 const ACCEPTANCE_HEADING = /^#{2,4}\s+((?:AC-?\d+)|(?:[A-Z]{1,3}\d+)|(?:\d+(?:\.\d+)*))\b/
@@ -423,7 +435,21 @@ function classifyCiValue(taskDir, value) {
   const need = required.ids
   const same = got.length === need.length && need.every((id) => got.includes(id)) && got.every((id) => need.includes(id))
   if (!same) return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
+  if (!results.every(commandProved)) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
   return { status: 'pass', pass: true, evidence: 'pass' }
+}
+
+function commandProved(row) {
+  if (!isObject(row) || row.passed !== true) return false
+  const id = typeof row.id === 'string' ? row.id.trim() : ''
+  if (!id || row.exitCode !== 0) return false
+  const marker = `${id} OK`
+  if (typeof row.lastLine !== 'string' || row.lastLine.trim() !== marker) return false
+  if (typeof row.output === 'string') {
+    const lines = row.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    if (!lines.length || lines[lines.length - 1] !== marker) return false
+  }
+  return true
 }
 
 function headCommitMs(repo) {
@@ -495,17 +521,30 @@ function latestVerdict(taskDir) {
   return { state: 'ok', value: parsed.value }
 }
 
+function resolveCommit(repo, rev) {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--verify', `${rev}^{commit}`], {
+      cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().toLowerCase()
+    return /^[0-9a-f]{40}$/.test(out) ? out : null
+  } catch {
+    return null
+  }
+}
+
 function classifyVerdict(repo, taskDir) {
   const verdict = latestVerdict(taskDir)
   if (verdict.state === 'missing') return { status: 'unknown', pass: false, evidence: 'unknown:missing' }
   if (verdict.state === 'corrupt') return { status: 'unknown', pass: false, evidence: 'unknown:corrupt' }
   if (verdict.value.verdict !== 'pass') return { status: 'fail', pass: false, evidence: 'fail' }
   const sha = typeof verdict.value.git_sha === 'string' ? verdict.value.git_sha.trim() : ''
-  if (!sha) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  if (!sha || !/^[0-9a-f]{7,64}$/i.test(sha)) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  const head = resolveCommit(repo, 'HEAD')
+  const reviewed = resolveCommit(repo, sha)
+  if (head && reviewed && head === reviewed) return { status: 'pass', pass: true, evidence: 'pass' }
   const ancestor = gitAncestor(repo, sha)
-  if (ancestor === 'unknown') return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
-  if (ancestor === 'no') return { status: 'stale', pass: false, evidence: 'stale' }
-  return { status: 'pass', pass: true, evidence: 'pass' }
+  if (ancestor === 'unknown' || !head || !reviewed) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  return { status: 'stale', pass: false, evidence: 'stale' }
 }
 
 function classifyOrigin(inspected) {
@@ -533,7 +572,9 @@ function groupOf(call, config) {
 }
 
 function classifyIsolation(taskDir, config) {
-  const calls = callsFromDisk(taskDir)
+  const found = callsFromDisk(taskDir)
+  if (found.corrupt) return { status: 'unknown', pass: false, evidence: 'unknown:identity' }
+  const calls = found.calls
   const dev = calls.filter((call) => call.role === 'dev')
   const review = calls.filter((call) => call.role === 'review')
   const problems = []
@@ -594,7 +635,7 @@ export function evaluateBuildGate(repo, taskDir, { config = {} } = {}) {
   const checks = [
     check('T.origin_valid', '来源批准仍然有效，且 node_sha256 与当前节点一致', classifyOrigin(origin)),
     check('T.ci_all_pass', 'CI 报告有效、非空且全部通过', ci),
-    check('T.verdict_pass', '评审 verdict 为 pass，且 git_sha 仍是 HEAD 的祖先', verdict),
+    check('T.verdict_pass', '评审 verdict 为 pass，且 git_sha 就是当前 HEAD', verdict),
     check('T.isolation', '开发与评审的实际身份不同，且每次调用与锁一致', isolation),
   ]
   let head = null
@@ -643,7 +684,7 @@ function countersOf(state) {
 }
 
 function actualModel(taskDir) {
-  const calls = callsFromDisk(taskDir).filter((call) => call.model_resolved && call.source !== 'none')
+  const calls = callsFromDisk(taskDir).calls.filter((call) => call.model_resolved && call.source !== 'none')
   if (!calls.length) return null
   return calls[calls.length - 1].model_resolved
 }

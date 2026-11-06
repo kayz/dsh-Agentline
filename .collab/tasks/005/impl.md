@@ -26,9 +26,9 @@ K1 已经规定单步、完整运行、worktree、锁、容量和终止证明。
 
 新角色名或 `roles.lock.json` 才启用身份观察。锁外模型在进适配器前拒绝。适配器没返回模型记为未验证；返回的 id 和请求不一致记为不匹配。没有未知副作用时，网络重试仍沿用 `executeRole` 的原模型重试，不会换成锁外候选。`model_resolved` 只来自这次调用，不再用请求 id 回填。
 
-T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pass`、`T.verdict_pass`、`T.isolation`，字段仍是 `id`、`desc`、`pass`、`waivable`、`evidence`。未知、失败和过期写在 `evidence`（`unknown:…`、`fail` / `fail:…`、`stale`、`pass`）。`T.ci_all_pass` 在文件缺失、损坏、空结果、计数对不上、结果盖不住 `acceptance.md` 里的可执行条目、缺少 `ranAt` 或读不出 HEAD 时间时为未知且 `pass: false`；结果里有明确 `passed: false` 才是失败。CI 的 `ranAt` 早于 HEAD、评审 `git_sha` 不是 HEAD 祖先，记为 `stale`。四项都不可豁免，豁免非通过项时 `evaluateGate` 报 `not waivable`。
+T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pass`、`T.verdict_pass`、`T.isolation`，字段仍是 `id`、`desc`、`pass`、`waivable`、`evidence`。未知、失败和过期写在 `evidence`（`unknown:…`、`fail` / `fail:…`、`stale`、`pass`）。`T.ci_all_pass` 在文件缺失、损坏、空结果、计数对不上、结果盖不住 `acceptance.md` 里的可执行条目、缺少 `ranAt` 或读不出 HEAD 时间时为未知且 `pass: false`。可以通过的每一条还必须有 `exitCode === 0`，并且 `lastLine` 正好是 `<AC-id> OK`；`output` 若存在，其最后一个非空行也必须是这一句。`passed: true` 但退出码或末行对不上、缺这些字段，都是未知，不能当成通过。结果里有明确 `passed: false` 才是失败。CI 的 `ranAt` 早于 HEAD 记为 `stale`。评审 `git_sha` 必须就是当前 HEAD：只是祖先、或者已经不在当前历史上，都记为 `stale`。四项都不可豁免，豁免非通过项时 `evaluateGate` 报 `not waivable`。
 
-业务轮次和基础设施重试用已有的 `counters.business_rounds` / `counters.infra_retries`。基础设施重试不增加业务轮次。每次物理调用在 ledger 里是 `event: 'call'`。隔离检查看每一次物理调用：失败或基础设施重试若没有可验证的实际身份，证据是 `unknown:identity`，不能因为同任务里还有成功调用就通过。投影缺计数时是未知；来源损坏是错误。节点变更、批准撤销或过期仍投影为 Blueprint，不落到旧任务。插件只读 `/agentline/pipeline` 和 `/agentline/task`。
+业务轮次和基础设施重试用已有的 `counters.business_rounds` / `counters.infra_retries`。基础设施重试不增加业务轮次。每次物理调用在 ledger 里是 `event: 'call'`。隔离检查看每一次物理调用：失败或基础设施重试若没有可验证的实际身份，证据是 `unknown:identity`，不能因为同任务里还有成功调用就通过。`step-ledger.jsonl` 里有任何读不出的非空行时，整份账本视为损坏，隔离同样是 `unknown:identity`，不再丢掉坏行后用剩下的调用放行，也不回退到 `run.json`。投影缺计数时是未知；来源损坏是错误。节点变更、批准撤销或过期仍投影为 Blueprint，不落到旧任务。插件只读 `/agentline/pipeline` 和 `/agentline/task`。
 
 ## 自测
 
@@ -52,6 +52,16 @@ T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pa
 - `T.ci_all_pass` 用 `acceptance.md` 里可执行的条目标题核对 `ci-results.json`。只留下一部分并把 `passed` / `total` 改成与结果条数一致，仍是未知。可以通过的报告还必须有可解析的 `ranAt`，并且能读到 HEAD 的提交时间；缺任何一项都不能当成通过。明确的 `passed: false` 仍是失败。
 - `T.isolation` 检查 ledger 里每一次物理调用。失败或基础设施重试没有 `model_resolved` 时记 `unknown:identity`，不能被同一次任务里已成功的开发或评审调用带过。
 - 节点哈希变了、批准被撤销或内容过期时，`readBuildTask` 的 `source` 固定为 `blueprint`。只有本来就没有 Blueprint 来源、或 `kind` 为旧任务 / 有效 adhoc 的，才投影成旧任务。损坏来源仍是错误。
+
+## 再修订
+
+评审又指出三处证据缺口，这次只补这些判定：
+
+- `T.ci_all_pass` 不再只看 `passed`。每一条要能证明命令通过：`exitCode` 必须是 0，`lastLine` 必须是该条的 `AC-n OK`。报告里若带了 `output`，最后一个非空行也必须是这一句。`passed: true` 但退出码是 1，或末行对不上，证据是 `unknown:undetermined`，不通过。
+- `T.verdict_pass` 要求 `git_sha` 解析后等于当前 HEAD。评审之后又有提交时，旧 SHA 仍是祖先，但已经不是这次要合并的代码，记为 `stale`。解析不了仍是未知。
+- `step-ledger.jsonl` 出现损坏行时，隔离检查直接是 `unknown:identity`。不再静默丢掉该行，也不在账本损坏时改读 `run.json`。
+
+这一轮自测：`node --check` 三个入口通过；`node --test` 覆盖 `build-gate` 与 `build-roles` 共 8 项通过；`cd orchestrator && npm test` 为 179 通过；`node --test plugin/test/*.test.mjs` 为 20 通过。
 
 ## 偏差与剩余
 
