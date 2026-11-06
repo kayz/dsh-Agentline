@@ -1,0 +1,24 @@
+{
+  "schema": "agentline.gate/v1",
+  "gate": "P0_fixture",
+  "subject": {
+    "kind": "task",
+    "id": "p0-fixture",
+    "content_hash": "sha256:7239d874e864983c23a00d980593d38fe846cbfc1c6165f8cf456599ae70b4c5",
+    "revision": 1
+  },
+  "evaluated_at": "2026-11-06T00:00:00.000Z",
+  "checks": [
+    { "id": "P0.1", "desc": "fixture is loadable", "pass": true, "waivable": false, "evidence": "fixtures/gate-pass.json" },
+    { "id": "P0.2", "desc": "approval is bound", "pass": true, "waivable": false }
+  ],
+  "waivers": [],
+  "approval": {
+    "required": true,
+    "approved": true,
+    "content_hash": "sha256:7239d874e864983c23a00d980593d38fe846cbfc1c6165f8cf456599ae70b4c5",
+    "by": "p0-fixture",
+    "at": "2026-11-06T00:00:00.000Z",
+    "text": "P0 fixture approval"
+  }
+}

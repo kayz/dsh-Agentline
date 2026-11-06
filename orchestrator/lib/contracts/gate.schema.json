@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentline.gate/v1",
+  "title": "AgentLine Gate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "gate", "subject", "checks", "evaluated_at"],
+  "properties": {
+    "schema": { "const": "agentline.gate/v1" },
+    "gate": { "type": "string", "minLength": 1 },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "content_hash", "revision"],
+      "properties": {
+        "kind": { "enum": ["studio", "blueprint", "task", "milestone", "release"] },
+        "id": { "type": "string", "minLength": 1 },
+        "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evaluated_at": { "type": "string", "format": "date-time" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "desc", "pass", "waivable"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "desc": { "type": "string", "minLength": 1 },
+          "pass": { "type": "boolean" },
+          "waivable": { "type": "boolean" },
+          "evidence": { "type": "string" },
+          "fix": { "type": "string" }
+        }
+      }
+    },
+    "waivers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check", "by", "at", "reason", "content_hash"],
+        "properties": {
+          "check": { "type": "string", "minLength": 1 },
+          "by": { "type": "string", "minLength": 1 },
+          "at": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string", "minLength": 1 },
+          "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "approved", "content_hash"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "approved": { "type": "boolean" },
+        "content_hash": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "by": { "type": "string" },
+        "at": { "type": "string", "format": "date-time" },
+        "text": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "pass"],
+      "properties": {
+        "status": { "enum": ["not_evaluated", "pass", "fail", "pending_approval", "stale"] },
+        "pass": { "type": "boolean" },
+        "failed": { "type": "array", "items": { "type": "string" } },
+        "waived": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

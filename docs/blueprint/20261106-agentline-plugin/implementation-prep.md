@@ -28,9 +28,11 @@
 
 ### P0：基础契约与夹具
 
-- 单一合并基线；
-- 输入锁、终止证明、gate/审批 JSON schema；
-- 测试夹具与故障注入。
+- 单一合并基线：`docs/design/agentline-v2-baseline.md`；
+- `orchestrator/lib/contracts/gate.mjs` + `gate.schema.json`；
+- `orchestrator/lib/contracts/input-lock.mjs`，并接入 `inputs.mjs`；
+- `orchestrator/lib/contracts/termination.mjs`；
+- 契约测试与故障注入。
 
 ### P1：控制面
 
@@ -45,7 +47,8 @@
 - Model Catalog/tier/allowlist；
 - 手工登记 + unverified；
 - 短上下文 probe 与 job；
-- 设置页配置 UI。
+- 设置页配置 UI；
+- **Cursor provider**：本机已安装 Cursor 3.29.9，`cursor agent` 子命令存在；模型发现/probe/自动调用方式待验证，详见 `docs/design/cursor-provider.md`。Cursor 的 discovered 模型不得自动进入 top allowlist。
 
 ### P3：插件 UI
 
