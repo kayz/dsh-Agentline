@@ -1,0 +1,33 @@
+{
+  "provider": "cursor",
+  "source": "cursor",
+  "adapter": "cursor-agent",
+  "transport": "cli",
+  "command": "cursor",
+  "experimental": true,
+  "cli": {
+    "version_command": ["--version"],
+    "tested_versions": ["3.29.9"],
+    "agent_subcommand": true
+  },
+  "capabilities": {
+    "agent_subcommand": true,
+    "non_interactive": false,
+    "model_list": false,
+    "readonly_mode": false
+  },
+  "discovery": {
+    "mode": "manual_or_probe",
+    "trust": "discovered_only",
+    "note": "Cursor 3.29.9 exposes the agent subcommand but not a stable non-interactive model list in the checked environment."
+  },
+  "probe": {
+    "required": true,
+    "prompt": "reply OK",
+    "max_output_tokens": 32,
+    "timeout_seconds": 45
+  },
+  "roles": {
+    "allowed_only_if": "callable && tier allowlisted && identity verified (or explicit unverified exception)"
+  }
+}
