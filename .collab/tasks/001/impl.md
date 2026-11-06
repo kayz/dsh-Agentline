@@ -26,3 +26,5 @@
 修正后重新执行 AC-1 至 AC-10 的全部原 JavaScript 断言，退出码均为 0，输出与验收期望一致；未修改验收断言。补充内存快照验证 live 加载、失败、成功为空及问题优先级，输出 `OK live loading+failure+empty priority`。本次 orchestrator `node --test` 退出码为 0，汇总仍为 71 tests、64 pass、0 fail、7 skipped。再次确认两个产品文件无 BOM，且不存在 `scripts/check-fast.ps1`。工具仍未提供可用的 pwsh 7，故通过 Node 直接执行原断言；未执行 AC-12 的 git 命令，未创建仓库内测试文件，DSH 人工观察仍待 review。
 
 本轮复核保留现有产品实现：两条 Host 路由均为只读转发，非 GET 返回 405；客户端已有五页、数据投影与请求代次保护。再次执行两个 `node --check` 均退出 0；在 orchestrator 目录直接运行 `node --test` 输出 71 项、64 通过、0 失败、7 跳过。测试内部调用了 Git 夹具，发现后未继续执行任何 Git 范围检查。本轮环境未找到 PowerShell 7，未重新运行验收中的 PowerShell 多步骤脚本，也未复核 DSH 中的实际布局和交互；上文其他检查结果为此前工作区记录，不代表本轮重跑。
+
+本次复核时，工作区已包含上述产品实现，因此保留现有 `client.js` 和 `index.js`。两条新增 Host 路由用于浏览器无法直接读取的 pipeline 摘要和模型目录，按设计只读转发。重新执行两个文件的 `node --check`，均通过；从验收文档提取原 JavaScript 断言直接运行，AC-3 至 AC-10 及 AC-13 的渲染检查均输出预期结果，包括数据投影、导航和 Host 路由运行检查。当前环境找不到 `pwsh` 7，因而没有按验收规定的 PowerShell 7 环境执行这些命令。由于本次明确禁止执行 Git，而既有 orchestrator 测试包含 Git 夹具，本次未运行 AC-11；AC-12、AC-14 的 Git 检查也未运行。此前测试记录不代表本次重跑。仓库中没有 `scripts/check-fast.ps1`；DSH 实际布局和交互仍需人工核验。
