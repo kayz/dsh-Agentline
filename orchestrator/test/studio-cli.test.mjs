@@ -46,11 +46,18 @@ function roleOf(prompt) {
   return m ? 'expert_' + m[1].toLowerCase() : 'unknown'
 }
 
-export default function () {
+export default function (provider) {
+  try {
+    fs.appendFileSync(process.env.STUDIO_PROVIDERS, JSON.stringify({
+      adapter: (provider && provider.adapter) || null,
+      options: (provider && provider.options) || {},
+    }) + '\\n')
+  } catch { /* ignore */ }
   return {
     async run({ prompt, logPath }) {
       const role = roleOf(prompt)
       try { fs.appendFileSync(process.env.STUDIO_CALLS, role + '\\n') } catch { /* ignore */ }
+      try { fs.appendFileSync(process.env.STUDIO_PROMPTS, JSON.stringify({ role, prompt }) + '\\n') } catch { /* ignore */ }
       if (process.env.STUDIO_FAIL === role) return { exitCode: 1, error: 'fixture failure: ' + role }
       let cfg = {}
       try { cfg = JSON.parse(fs.readFileSync(process.env.STUDIO_FIXTURE, 'utf8')) } catch { cfg = {} }
@@ -81,10 +88,14 @@ function setup() {
   const local = path.join(cfgDir, 'agentline.local.json')
   const models = path.join(cfgDir, 'agentline.models.json')
   const calls = path.join(root, 'calls.log')
+  const prompts = path.join(root, 'prompts.jsonl')
+  const providers = path.join(root, 'providers.jsonl')
   const fixtureCfg = path.join(root, 'fixture.json')
   const adapterModule = path.join(root, 'fixture-adapter.mjs')
   fs.writeFileSync(adapterModule, FIXTURE, 'utf8')
   fs.writeFileSync(calls, '', 'utf8')
+  fs.writeFileSync(prompts, '', 'utf8')
+  fs.writeFileSync(providers, '', 'utf8')
   writeJson(fixtureCfg, {})
 
   writeJson(base, {
@@ -121,7 +132,7 @@ function setup() {
   })
   writeJson(models, { version: 1, generatedAt: '2026-11-06T00:00:00Z', providers: {} })
 
-  const env = { STUDIO_CALLS: calls, STUDIO_FIXTURE: fixtureCfg }
+  const env = { STUDIO_CALLS: calls, STUDIO_PROMPTS: prompts, STUDIO_PROVIDERS: providers, STUDIO_FIXTURE: fixtureCfg }
   const run = (args, extraEnv = {}) => spawnSync(process.execPath, [
     CLI, 'studio', ...args,
     '--repo', repo, '--config', base, '--local', local, '--models', models,
@@ -134,10 +145,12 @@ function setup() {
     return { ...r, json }
   }
   const callsList = () => fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter(Boolean)
+  const promptsList = () => fs.readFileSync(prompts, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l))
+  const providerLog = () => fs.readFileSync(providers, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l))
   const sessionFile = (id) => path.join(repo, '.collab', 'studio', id, 'session.json')
   const readSession = (id) => JSON.parse(fs.readFileSync(sessionFile(id), 'utf8'))
   const dir = (id) => path.join(repo, '.collab', 'studio', id)
-  return { root, repo, base, local, models, calls, fixtureCfg, run, status, callsList, sessionFile, readSession, dir }
+  return { root, repo, base, local, models, calls, prompts, providers, fixtureCfg, run, status, callsList, promptsList, providerLog, sessionFile, readSession, dir }
 }
 
 function newSession(ctx, id) {
@@ -379,8 +392,14 @@ test('studio cli: an expert reject blocks progress and must be re-confirmed inde
   assert.equal(rejected.status, 0, rejected.stderr || rejected.stdout)
   const afterReject = ctx.readSession('s6')
   assert.equal(afterReject.status, 'awaiting_user')
-  assert.deepEqual(afterReject.steps_done.includes('confirm_a'), true)
-  assert.deepEqual(afterReject.steps_done.includes('confirm_b'), false, '被拒绝的确认步骤必须重做')
+  // 修订后所有专家的旧确认都作废：必须各自重新独立确认
+  assert.equal(afterReject.steps_done.includes('confirm_a'), false, '旧确认必须重做')
+  assert.equal(afterReject.steps_done.includes('confirm_b'), false, '被拒绝的确认步骤必须重做')
+  assert.equal(afterReject.steps_done.includes('confirm_c'), false, '旧确认必须重做')
+
+  const confDir = path.join(ctx.dir('s6'), 'confirmations')
+  assert.equal(fs.existsSync(path.join(confDir, 'expert_a.json')), false, '别人的旧确认被作废')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(confDir, 'expert_b.json'), 'utf8')).verdict, 'reject')
 
   const rejectQuestions = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'questions.json'), 'utf8'))
   const last = rejectQuestions[rejectQuestions.length - 1]
@@ -388,9 +407,12 @@ test('studio cli: an expert reject blocks progress and must be re-confirmed inde
   assert.equal(last.status, 'open')
   assert.equal(last.expert, 'expert_b')
 
-  // 拒绝写入一轮业务轮次
+  // 拒绝写入一轮业务轮次，并进入纪要的修订记录
   const rejectedDecisions = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'decisions.json'), 'utf8'))
   assert.deepEqual(rejectedDecisions.map((d) => d.rounds_used), [1, 1])
+  const rejectMinutes = fs.readFileSync(path.join(ctx.dir('s6'), 'minutes-final.md'), 'utf8')
+  assert.match(rejectMinutes, /修订记录/)
+  assert.match(rejectMinutes, /范围需要收窄/)
 
   const blockedAgain = ctx.run(['run', '--id', 's6'])
   assert.notEqual(blockedAgain.status, 0)
@@ -399,18 +421,29 @@ test('studio cli: an expert reject blocks progress and must be re-confirmed inde
   assert.notEqual(failedG0.status, 0)
   assert.match(failedG0.stdout, /G0\.experts_confirmed/)
 
-  // 用户处理后，同一位专家必须独立重新确认
+  // 用户处理后：答复必须落盘的纪要里，也要出现在重新确认的提示词里
   assert.equal(ctx.run(['answer', '--id', 's6', '--question', last.id, '--text', '收窄到 P6']).status, 0)
+  const answeredMinutes = fs.readFileSync(path.join(ctx.dir('s6'), 'minutes-final.md'), 'utf8')
+  assert.match(answeredMinutes, /用户处理/)
+  assert.match(answeredMinutes, /收窄到 P6/)
+
   writeJson(ctx.fixtureCfg, {})
   const before = ctx.callsList().length
-  assert.equal(ctx.run(['run', '--id', 's6']).status, 0)
-  assert.equal(ctx.callsList().length, before + 1)
-  assert.equal(ctx.callsList().slice(-1)[0], 'confirm_b')
+  for (const step of ['a', 'b', 'c']) {
+    assert.equal(ctx.run(['run', '--id', 's6']).status, 0)
+  }
+  const afterCalls = ctx.callsList()
+  assert.deepEqual(afterCalls.slice(before), ['confirm_a', 'confirm_b', 'confirm_c'])
+
+  const confirmPromptText = ctx.promptsList().filter((p) => p.role === 'confirm_b').pop()
+  assert.ok(confirmPromptText, 'expert_b re-confirmed independently')
+  assert.match(confirmPromptText.prompt, /收窄到 P6/, 're-confirmation sees the user answer')
+  assert.match(confirmPromptText.prompt, /范围需要收窄/, 're-confirmation sees the recorded rejection')
+
   const record = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'confirmations', 'expert_b.json'), 'utf8'))
   assert.match(record.verdict, /^accept/)
   assert.equal(record.model, ctx.readSession('s6').roles.expert_b.model)
 
-  assert.equal(ctx.run(['run', '--id', 's6']).status, 0) // confirm_c
   const pass = ctx.run(['conclude', '--id', 's6'])
   assert.equal(pass.status, 0, pass.stdout + pass.stderr)
   assert.match(pass.stdout, /G0 PASS/)
@@ -428,4 +461,70 @@ test('studio cli: a provider that cannot guarantee read-only refuses to start a 
   assert.notEqual(r.status, 0)
   assert.match(r.stderr, /read-only/)
   assert.equal(fs.existsSync(ctx.dir('ro')), false, '不能创建无法保证只读的会话')
+})
+
+test('studio cli: read-only is pinned on the adapter instead of trusting a capability flag', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+
+  const cfg = JSON.parse(fs.readFileSync(ctx.base, 'utf8'))
+  // 声明 readonly_mode=true，但 provider.options 本身是可写的：不能因此放行。
+  cfg.providers.claude = {
+    source: 'openai', adapter: 'codex-cli', transport: 'cli', command: 'codex',
+    capabilities: { readonly_mode: true },
+    options: { sandbox: 'workspace-write', approvalPolicy: 'on-request' },
+    effort: { supported: ['high'], cap: 'high' },
+    limits: { timeoutMinutes: 1 },
+  }
+  fs.writeFileSync(ctx.base, JSON.stringify(cfg, null, 2), 'utf8')
+
+  newSession(ctx, 'ro2')
+  assert.equal(ctx.run(['run', '--id', 'ro2']).status, 0)
+  const codexOpts = ctx.providerLog().pop()
+  assert.equal(codexOpts.adapter, 'codex-cli')
+  assert.equal(codexOpts.options.sandbox, 'read-only')
+  assert.equal(codexOpts.options.approvalPolicy, 'never')
+
+  // claude-cli：覆盖 acceptEdits，只留 Read
+  cfg.providers.claude = {
+    ...cfg.providers.claude,
+    adapter: 'claude-cli',
+    command: 'claude',
+    options: { permissionMode: 'acceptEdits', allowedTools: ['Read', 'Write', 'Edit'] },
+  }
+  fs.writeFileSync(ctx.base, JSON.stringify(cfg, null, 2), 'utf8')
+  newSession(ctx, 'ro4')
+  assert.equal(ctx.run(['run', '--id', 'ro4']).status, 0)
+  const claudeOpts = ctx.providerLog().pop()
+  assert.equal(claudeOpts.adapter, 'claude-cli')
+  assert.equal(claudeOpts.options.permissionMode, 'plan')
+  assert.deepEqual(claudeOpts.options.allowedTools, ['Read'])
+
+  // 显式声明不可只读时，即使 adapter 支持也只拒绝
+  cfg.providers.claude = { ...cfg.providers.claude, capabilities: { readonly_mode: false } }
+  fs.writeFileSync(ctx.base, JSON.stringify(cfg, null, 2), 'utf8')
+  const refused = ctx.run(['new', '--id', 'ro5', '--title', 'x', '--input', '只读讨论'])
+  assert.notEqual(refused.status, 0)
+  assert.match(refused.stderr, /read-only/)
+  assert.equal(fs.existsSync(ctx.dir('ro5')), false)
+})
+
+test('studio cli: missing questions.json is an error, never "no blocking"', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  newSession(ctx, 's7')
+  for (let i = 0; i < 4; i++) assert.equal(ctx.run(['run', '--id', 's7']).status, 0)
+
+  fs.rmSync(path.join(ctx.dir('s7'), 'questions.json'))
+
+  assert.equal(ctx.status('s7').json.state, 'corrupt')
+  const human = ctx.run(['status', '--id', 's7'])
+  assert.notEqual(human.status, 0)
+  assert.match(human.stdout + human.stderr, /corrupt/)
+
+  const run = ctx.run(['run', '--id', 's7'])
+  assert.notEqual(run.status, 0, '缺失的问题证据不能继续跑')
+  const g0 = ctx.run(['conclude', '--id', 's7'])
+  assert.notEqual(g0.status, 0)
+  assert.match(g0.stdout, /G0\.no_open_blocking/)
 })

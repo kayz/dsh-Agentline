@@ -906,3 +906,36 @@ test('studio host route: reads real sessions read-only and forwards writes as on
   assert.deepEqual(cliCalls()[1], ['studio', 'answer', '--repo', project, '--id', 'real', '--question', 'Q-1', '--text', '只做 P6', '--channel', 'ui'])
 })
 
+test('studio host route: corrupt associated evidence is an error, not empty or ok', async (t) => {
+  const { home } = makeHome()
+  const project = makeProject('corrupt-evidence', { sessions: [studioFixture('bad')] })
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(project, { recursive: true, force: true }) })
+  fs.writeFileSync(path.join(project, '.collab', 'studio', 'bad', 'questions.json'), '{oops', 'utf8')
+
+  const host = await import(pathToFileURL(HOST).href + '?v=' + Date.now())
+  const { ctx, routes } = makeCtx()
+  host.apply(ctx, { agentlineHome: home, nodePath: process.execPath, defaultRepo: project, metricsEnabled: false })
+
+  const list = await callRoute(routes, '/agentline/studio', {
+    url: '/agentline/studio?project=' + encodeURIComponent(project),
+  })
+  assert.equal(list.body.ok, true)
+  assert.deepEqual(list.body.sessions.map((s) => s.id), ['bad'])
+  assert.equal(list.body.sessions[0].state, 'corrupt')
+
+  const detail = await callRoute(routes, '/agentline/studio', {
+    url: '/agentline/studio?project=' + encodeURIComponent(project) + '&id=bad',
+  })
+  assert.equal(detail.body.ok, false)
+  assert.equal(detail.body.state, 'corrupt')
+  assert.match(detail.body.error, /questions\.json/)
+
+  fs.rmSync(path.join(project, '.collab', 'studio', 'bad', 'questions.json'))
+  const missingEvidence = await callRoute(routes, '/agentline/studio', {
+    url: '/agentline/studio?project=' + encodeURIComponent(project) + '&id=bad',
+  })
+  assert.equal(missingEvidence.body.ok, false)
+  assert.equal(missingEvidence.body.state, 'corrupt')
+  assert.match(missingEvidence.body.error, /missing/)
+})
+

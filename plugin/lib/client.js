@@ -154,6 +154,19 @@ window.__ModuleLoader__.load({
       missing: '不存在', empty: '空', corrupt: '损坏', failed: '失败',
     }
     const show = (v) => (v === undefined || v === null || v === '' || v === 'unknown' ? '未知' : String(v))
+    // 与会话核心同一判定：只有带有效用户动作的 answered/default_adopted 才算真的关闭。
+    // 界面不能因为一个状态字符串就把未回答的问题当成已处理。
+    const questionClosed = (q) => {
+      const a = q && q.user_action
+      if (!a || typeof a !== 'object') return false
+      if (a.kind !== 'answer' && a.kind !== 'default' && a.kind !== 'confirm') return false
+      if (!String(a.text || '').trim()) return false
+      if (!a.at || typeof a.at !== 'string') return false
+      const status = String((q && q.status) || 'open')
+      if (status === 'answered' || status === 'resolved') return a.kind === 'answer'
+      if (status === 'default_adopted') return a.kind === 'default'
+      return false
+    }
     const channelOf = (provider) => {
       const p = String(provider || '').toLowerCase()
       return CHANNEL_IDS.indexOf(p) >= 0 ? p : (p ? 'other' : 'unknown')
@@ -889,7 +902,7 @@ window.__ModuleLoader__.load({
         const sessions = list && list.ok ? list.sessions : []
         const detail = studioDetail
         const busy = studioBusy || !project
-        const openBlocking = detail ? (detail.questions || []).filter((q) => q.blocking && (q.status === 'open' || q.status === 'unresolved')) : []
+        const openBlocking = detail ? (detail.questions || []).filter((q) => q.blocking && !questionClosed(q)) : []
         const session = detail ? detail.session : null
         const sid = studioSel
         const nextStep = session ? (STUDIO_STEPS.find((x) => (session.steps_done || []).indexOf(x) < 0) || 'done') : null
@@ -939,7 +952,7 @@ window.__ModuleLoader__.load({
                       h('span', { className: 'agl-tag' }, q.blocking ? '阻塞' : '普通'),
                       h('b', null, q.id), h('span', { className: 'agl-fine' }, q.status)),
                     fine(q.text),
-                    q.status === 'open'
+                    !questionClosed(q)
                       ? h('div', { className: 'agl-ctl' },
                         h('input', {
                           className: 'agl-input', 'data-testid': 'answer-input-' + q.id,

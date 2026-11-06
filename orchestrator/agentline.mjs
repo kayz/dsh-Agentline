@@ -600,7 +600,7 @@ async function cmdStudio() {
       }
       const r = readStudio(repo, id)
       if (args.json) {
-        const g0 = r.state === 'ok' ? evaluateG0(repo, id) : null
+        const g0 = r.session ? evaluateG0(repo, id) : null
         log(JSON.stringify({ id, ...r, g0 }, null, 2))
         return
       }

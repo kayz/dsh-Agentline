@@ -32,7 +32,9 @@
 
 - 会话 ID 只接受单个安全路径段（`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`，拒绝 `.`/`..`/`/`/`\`）；
   新建不覆盖已有目录。
-- `readStudio` 区分 `missing / empty / corrupt / ok`，CLI `status` 与插件 GET 都基于同一实现。
+- `readStudio` 区分 `missing / empty / corrupt / ok`，CLI `status` 与插件 GET 都基于同一实现；
+  `questions.json` / `decisions.json` 缺失或损坏时整体返回 `corrupt`（会话仍在，但界面必须显示错误，
+  不能当成"没有会话"或"没有阻塞"）。
 
 ### 单步状态机
 
@@ -60,9 +62,11 @@ expert_a → expert_b → expert_c → moderator → scribe → confirm_a → co
 - 业务轮次：回答一次问题给该问题记 1 轮（若问题关联到某个决策，同时给该决策记 1 轮）；
   达到 2 轮后拒绝再开文本讨论轮次（`E_ROUND_LIMIT`），但允许显式采用默认。轮次不因失败/重试自增。
 - 专家拒绝（`verdict=reject`）会写一条 `kind=expert_reject` 的阻塞问题，并给每个决策记 1 轮；
-  同时把 `confirm_<x>` 从 `steps_done` 撤回，用户处理后必须由同一位专家重新独立确认。
-  若这次拒绝会让决策轮次超过 2，则不再重开该步骤（`blocking_reason=round_limit`），
-  G0 的轮次检查会失败——不自动选默认、也不进入第三轮。
+  同时**撤掉全部 `confirm_*` 步骤**并删除其他专家的确认文件（旧确认是对拒绝前证据的确认），
+  纪要末尾追加「修订记录（第 N 轮）」写明拒绝原因；用户 `answer` 后，用户处理也追加到同一记录。
+  确认提示词包含纪要、决策、以及全部问题与用户回答，所以三位专家是对**修订后的证据**重新独立确认。
+  若这次拒绝会让决策轮次超过 2，则停在 `awaiting_user(round_limit)`，`run` 直接拒绝
+  （`E_ROUNDS_EXHAUSTED`），不自动选默认、也不进入第三轮。
 
 ### G0
 
@@ -79,13 +83,15 @@ G0.experts_confirmed    a/b/c 都有有效确认且无 reject
 G0.scribe_ne_moderator  书记与主持模型均已知且不同
 ```
 
-- 问题文件损坏时 `G0.no_open_blocking` 直接失败（不能当作"没有阻塞"）。
+- 问题文件缺失、损坏或不是数组时 `G0.no_open_blocking` 直接失败（不能当作"没有阻塞"）；
+  只有 `answered`/`default_adopted` **且带有效 user_action** 的问题才算关闭，其余一律按未处理。
 - 证据文件"能解析但不是数组"同样算无效：`questions.json` 不是数组时按有阻塞处理，
   `decisions.json` 不是数组时 `decisions_nonempty` / `each_decision_confirmed` 直接失败。
 - 用户动作必须完整：`confirmed_by_user` 需要合法的 `kind`（confirm/default）、非空 `text`
   和时间戳；只有类型、没有内容的记录不算确认。
-- 专家确认必须可归因：记录里的 `expert` 必须与角色一致，`model` 必须等于该角色被分配的模型，
-  且带 `verdict` 与 `at`。别的专家或别的模型代写的确认一律不算。
+- 专家确认必须可归因：记录里的 `expert` 必须等于角色本身（缺失也不算），`model` 必须等于
+  该角色被分配的模型（角色没有分配模型时同样不算），且带 `verdict` 与 `at`。
+  别的专家或别的模型代写的确认一律不算。
 - `conclude` 通过才写 `status=concluded`；失败时若之前是 concluded，会改回
   `awaiting_user(blocking_reason=g0_failed)`，不保留过期通过状态。
 - `conclude` 不写任何用户确认或专家确认。
@@ -98,10 +104,10 @@ G0.scribe_ne_moderator  书记与主持模型均已知且不同
   模型需要存在、provider 已配置，`availability` 不能是 `blocked/unavailable`。
 - 任一条件不满足都会给出明确错误，不会用示例结果冒充真实调用。
 - 只读：Studio 每次调用都用"只读 provider 副本"，把能强制只读的 adapter 钉死在只读模式
-  （`claude-cli` → `--permission-mode plan` + 仅 `Read`；`codebuddy-cli` → `plan`；
-  `codex-cli` → `sandbox=read-only`）。显式 `capabilities.readonly_mode=false` 的渠道
-  （如 Cursor 的 `--force`）直接拒绝；既没声明、又无法强制只读的渠道也拒绝，不静默执行。
-  该判定只作用于 Studio，`flow.mjs` 与既有 adapter 行为不变。
+  （`claude-cli` → `permission-mode=plan` + 仅 `Read`；`codebuddy-cli` → `plan`；
+  `codex-cli` → `sandbox=read-only`）。只以 adapter 能钉死的参数为准：`capabilities.readonly_mode=true`
+  只是意愿，不会跳过强制参数；声明 `false` 或 adapter 没有已知只读模式的渠道（Cursor、Gemini）
+  一律拒绝，不静默执行。该判定只作用于 Studio，`flow.mjs` 与既有 adapter 行为不变。
 - 书记纪要与机器 JSON 分离：`minutes-final.md` 只写正文，末尾的控制 JSON 不落进纪要；
   正文为空时整步失败（不能拿空的"纪要"去过 G0）。决策由书记一次产出，重跑时替换而非追加。
 
@@ -191,6 +197,34 @@ Push-Location orchestrator; try { & npm test } finally { Pop-Location }
 | P1 确认/轮次不可恢复 | 专家拒绝后无法重新确认，拒绝不计轮次，`run` 会继续往下走 | 拒绝写阻塞问题 + 决策记 1 轮 + 撤回该确认步骤；轮次超限则停在 `awaiting_user(round_limit)` |
 | P2 空/损坏会话与错误混淆 | 插件不校验 project，UI 错误文案没有状态信息 | 路由校验 project 必须是真实目录；详情错误附带 `missing/empty/corrupt` 中文状态，仍与空列表空态区分 |
 | P2 纪要与机器 JSON 混写 | `minutes-final.md` 整段写入模型输出（含控制 JSON），G0 只判非空；书记重跑会追加旧决策 | 新增 `splitModelOutput` 只落正文，正文为空则整步失败；决策改为替换写入 |
+
+## 第二轮修订（针对 review-r1 的 5 条 findings）
+
+| finding | 原因 | 修正 |
+|---|---|---|
+| P1 缺失/无效证据仍可通过 G0 | `readStudio` 只在文件存在时判无效，缺失的 `questions.json` 变成空数组；关闭判定只看 `status` 字段 | 缺失也算无效并整体返回 `state=corrupt`；新增 `questionClosed`，`answered`/`default_adopted` 必须有 kind 匹配、内容非空、带时间戳的 `user_action` 才算关闭。CLI `run` 遇到关联证据无效直接报错，`conclude` 对应 check 失败 |
+| P1 拒绝后的答复不参与重新确认 | 确认提示词只有决策和纪要；其他专家的旧确认仍然有效；纪要不记录修订 | 拒绝时撤掉全部 `confirm_*` 步骤、删除其他专家的确认文件，并在纪要追加「修订记录」；用户回答写入同一条记录；`confirmPrompt` 增加完整的问题与用户回答；轮次耗尽后 `run` 报 `E_ROUNDS_EXHAUSTED` |
+| P1 能力声明可绕过强制只读 | `readonly_mode=true` 时跳过强制参数，Codex 仍按 `workspace-write` 运行 | `readonlyProvider` 只认 adapter 的强制只读参数：有映射就一律覆盖 provider.options，没有映射或声明 `false` 就返回 null，`new` 直接失败 |
+| P2 损坏的关联证据仍返回成功 | 只追加 errors，`state` 仍是 ok | 关联证据无效 → `state=corrupt`，插件 GET 返回 `ok:false + state`，UI 显示可重试错误；列表仍能看到该会话及 `state=corrupt` |
+| P2 不完整的专家确认可通过 | 只在字段存在时校验归属，角色模型缺失时跳过校验 | 要求 `expert === role` 且角色已分配模型且 `model` 与之相等，否则计为缺失 |
+
+关于决策：拒绝不会改写决策正文（决策是用户逐条确认过的内容），所以用户的确认保持有效；
+专家重新确认的对象是「修订后的纪要 + 决策 + 问题与用户答复」。若书记重跑（重新产出决策），
+决策按新内容整体替换，`confirmed_by_user` 归零，用户必须重新逐条确认——这是
+`normalizeDecisions(parsed, [])` 的既有行为，不是本轮新增。
+
+新增/加强的测试（全部断言落盘内容或真实调用，不看源码字符串）：
+
+- `studio-cli`：假 adapter 记录 provider 参数、prompt 和调用序列。新增
+  「只读由 adapter 强制」——`readonly_mode=true` + `workspace-write` 必须被改成 `read-only`、
+  claude 的 `acceptEdits` 必须被改成 `plan/Read`、声明 `false` 必须拒绝建会话；
+  「缺失 questions.json」必须 `status=corrupt`、`run`/`conclude` 均失败；
+  拒绝用例改为断言三位专家全部重新确认、旧确认文件被删除、纪要与确认提示词包含拒绝原因和用户答复。
+- `studio-g0`：新增缺失 `questions.json`、缺失 `decisions.json`、
+  「answered/default_adopted 但 user_action 缺失或无效」、确认记录缺 `expert`、
+  角色未分配模型五类反例。
+- `studio-ui`：新增真实 host 路由用例——`questions.json` 损坏或缺失时详情返回
+  `ok:false + state=corrupt`（列表仍可读），与空态区分。
 
 ## 已知边界
 

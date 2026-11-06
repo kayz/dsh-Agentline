@@ -185,6 +185,66 @@ test('g0: corrupt questions.json cannot be treated as "no blocking"', (t) => {
   assert.equal(check(r, 'G0.no_open_blocking').pass, false)
 })
 
+test('g0: a missing questions.json cannot be treated as "no blocking"', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  materialize(repo, 'g0', evidence())
+  fs.rmSync(path.join(repo, '.collab', 'studio', 'g0', 'questions.json'))
+  const r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.no_open_blocking').pass, false)
+})
+
+test('g0: a "closed" question without a valid user action is still open', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+
+  for (const patch of [
+    { status: 'answered', user_action: null },
+    { status: 'answered', user_action: { kind: 'answer' } },
+    { status: 'answered', user_action: { kind: 'answer', text: '   ', at: AT } },
+    { status: 'default_adopted', user_action: { kind: 'answer', text: 'A', at: AT } },
+    { status: 'default_adopted', user_action: { kind: 'default', text: 'A' } },
+  ]) {
+    const data = evidence()
+    data.questions = [{ ...data.questions[0], ...patch }]
+    materialize(repo, 'g0', data)
+    const r = evaluateG0(repo, 'g0')
+    assert.equal(r.pass, false, JSON.stringify(patch))
+    assert.equal(check(r, 'G0.no_open_blocking').pass, false, JSON.stringify(patch))
+  }
+})
+
+test('g0: a confirmation without expert attribution or an assigned model does not count', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+
+  const anonymous = evidence()
+  delete anonymous.confirmations.expert_a.expert
+  materialize(repo, 'g0', anonymous)
+  let r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.experts_confirmed').pass, false)
+
+  const unassigned = evidence()
+  delete unassigned.session.roles.expert_a
+  materialize(repo, 'g0', unassigned)
+  r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false, '没有分配模型的角色无法证明独立确认')
+  assert.equal(check(r, 'G0.experts_confirmed').pass, false)
+})
+
+test('g0: a missing decisions.json fails instead of reading as "no decisions"', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  materialize(repo, 'g0', evidence())
+  fs.rmSync(path.join(repo, '.collab', 'studio', 'g0', 'decisions.json'))
+  const r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.decisions_nonempty').pass, false)
+  assert.equal(check(r, 'G0.each_decision_confirmed').pass, false)
+})
+
 test('g0: more than two business rounds fails', (t) => {
   const { repo } = makeRepo()
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }))

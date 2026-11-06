@@ -42,21 +42,19 @@ const READONLY_ADAPTER_OPTIONS = {
   'codex-cli': { sandbox: 'read-only', approvalPolicy: 'never' },
 }
 
-/** 问题已结束的状态：其余状态（含缺失）都按未处理对待。 */
-const CLOSED_QUESTION = new Set(['answered', 'default_adopted', 'resolved', 'closed'])
-
 /**
  * 返回一个只读的 provider 副本；无法保证只读时返回 null。
- * 显式 capabilities.readonly_mode=false 一律拒绝；没有声明时只有能强制到只读模式的
- * adapter 才允许（例如 codex 的 sandbox=read-only），其余渠道必须显式声明。
+ *
+ * 只认 adapter 能钉死的只读模式：声明 `capabilities.readonly_mode=true` 只是意愿，
+ * 不能证明实际参数只读（例如 Codex 默认 `sandbox=workspace-write`），所以声明不会被
+ * 当作放行条件；能强制只读的 adapter 一律覆盖 provider.options。声明 false 或没有
+ * 已知只读模式的渠道直接拒绝。
  */
 export function readonlyProvider(provider) {
   if (!provider || typeof provider !== 'object') return null
-  const declared = provider.capabilities?.readonly_mode
-  if (declared === false) return null
-  // 显式声明 true 的渠道已经有自己的只读配置，直接用；否则只能靠能钉死的 adapter。
-  const forced = declared === true ? {} : (READONLY_ADAPTER_OPTIONS[provider.adapter] || {})
-  if (declared !== true && !Object.keys(forced).length) return null
+  if (provider.capabilities?.readonly_mode === false) return null
+  const forced = READONLY_ADAPTER_OPTIONS[provider.adapter]
+  if (!forced || !Object.keys(forced).length) return null
   return {
     ...provider,
     options: { ...(provider.options || {}), ...forced },
@@ -70,7 +68,8 @@ export function assertReadonlyProvider(provider, label) {
     throw new StudioError(
       'E_READONLY_UNAVAILABLE',
       `provider ${label} cannot guarantee a read-only Studio conversation` +
-      '（显式声明 capabilities.readonly_mode=true，或使用支持只读模式的 adapter）',
+      '（需要 adapter 支持强制只读模式，如 claude-cli/codebuddy-cli/codex-cli；' +
+      'capabilities.readonly_mode=false 一律拒绝）',
     )
   }
   return ro
@@ -191,8 +190,8 @@ function resolveRoles(config, projectCfg, overrides = {}) {
       }
       const provider = config.providers?.[model.provider]
       if (!provider) { reasons.push(`${key}: provider ${model.provider} not configured`); continue }
-      // 只读能力是渠道级问题：换一个候选也不会变好，直接报告。
-      assertReadonlyProvider(provider, model.provider)
+      // 无法保证只读的渠道不能静默执行；换下一个候选也不会让它变好，但别的候选可能可以。
+      if (!readonlyProvider(provider)) { reasons.push(`${key}: provider ${model.provider} cannot be forced read-only`); continue }
       picked = { key, model, provider }
       break
     }
@@ -225,7 +224,8 @@ function validSession(s) {
 
 /**
  * 读取一个会话：区分 missing / empty / corrupt / ok。
- * 只读，不创建任何文件。
+ * session.json 之外的必需证据（questions.json、decisions.json）缺失或损坏时也算 corrupt，
+ * 因为它们无法证明"没有阻塞问题"，不能按空数据处理。只读，不创建任何文件。
  */
 export function readStudio(repo, id) {
   const dir = sessionDir(repo, id)
@@ -239,14 +239,14 @@ export function readStudio(repo, id) {
   const questionsPath = path.join(dir, 'questions.json')
   const decisionsPath = path.join(dir, 'decisions.json')
   const questions = readJson(questionsPath)
-  const questionsInvalid = fs.existsSync(questionsPath) && (!questions.ok || !Array.isArray(questions.value))
+  const questionsInvalid = !questions.ok || !Array.isArray(questions.value)
   if (questionsInvalid) {
-    errors.push(`questions.json invalid: ${questions.ok ? 'not an array' : questions.error}`)
+    errors.push(`questions.json invalid: ${!fs.existsSync(questionsPath) ? 'missing' : (questions.ok ? 'not an array' : questions.error)}`)
   }
   const decisions = readJson(decisionsPath)
-  const decisionsInvalid = fs.existsSync(decisionsPath) && (!decisions.ok || !Array.isArray(decisions.value))
+  const decisionsInvalid = !decisions.ok || !Array.isArray(decisions.value)
   if (decisionsInvalid) {
-    errors.push(`decisions.json invalid: ${decisions.ok ? 'not an array' : decisions.error}`)
+    errors.push(`decisions.json invalid: ${!fs.existsSync(decisionsPath) ? 'missing' : (decisions.ok ? 'not an array' : decisions.error)}`)
   }
 
   const confirmations = {}
@@ -261,7 +261,8 @@ export function readStudio(repo, id) {
   }
 
   return {
-    state: 'ok',
+    // 关联证据损坏时整体按 corrupt 返回：UI 必须能把它与"没有会话"区分开。
+    state: questionsInvalid || decisionsInvalid ? 'corrupt' : 'ok',
     dir,
     session: raw.value,
     questions: Array.isArray(questions.value) ? questions.value : [],
@@ -289,8 +290,8 @@ export function listSessions(repo) {
       status: r.session?.status || r.state,
       step: currentStep(r.session),
       updated_at: r.session?.updated_at || null,
-      open_blocking: r.state === 'ok' ? openBlocking(r.questions, r.questionsInvalid).length : null,
-      pending_decisions: r.state === 'ok' && Array.isArray(r.decisions) ? r.decisions.filter((d) => !decisionConfirmed(d)).length : null,
+      open_blocking: r.session ? openBlocking(r.questions, r.questionsInvalid).length : null,
+      pending_decisions: r.session && Array.isArray(r.decisions) ? r.decisions.filter((d) => !decisionConfirmed(d)).length : null,
     })
   }
   out.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')) || a.id.localeCompare(b.id))
@@ -305,17 +306,43 @@ export function currentStep(session) {
   return STEPS.find((s) => !done.has(s)) || 'done'
 }
 
+/** 用户动作必须带类型、内容和时间：只有类型不算确认。 */
+function userActionOf(record) {
+  const a = record && record.user_action
+  if (!a || typeof a !== 'object') return null
+  if (a.kind !== 'answer' && a.kind !== 'default' && a.kind !== 'confirm') return null
+  if (!String(a.text || '').trim()) return null
+  if (!a.at || typeof a.at !== 'string') return null
+  return a
+}
+
 /**
- * 未处理的阻塞问题。状态缺失时按"未处理"对待——未回答的问题不能被当成已确认。
+ * 问题是否真的结束：除状态字段外，还必须有内容匹配的有效用户动作。
+ * 只有 `status=answered` 而没有 user_action 的记录既不能算关闭，也不能算确认。
+ */
+function questionClosed(q) {
+  if (!q || typeof q !== 'object') return false
+  const a = userActionOf(q)
+  if (!a) return false
+  const status = String(q.status || 'open')
+  if (status === 'answered' || status === 'resolved') return a.kind === 'answer'
+  if (status === 'default_adopted') return a.kind === 'default'
+  if (status === 'closed') return a.kind === 'answer' || a.kind === 'default'
+  return false
+}
+
+/**
+ * 未处理的阻塞问题。状态或用户动作缺失时按"未处理"对待——
+ * 未回答的问题不能被当成已确认。
  */
 function openBlocking(questions, invalid) {
   if (invalid) return [{ id: 'questions.json', text: 'questions.json 无效，无法证明没有阻塞问题', status: 'invalid' }]
-  return (questions || []).filter((q) => q && q.blocking && !CLOSED_QUESTION.has(String(q.status || 'open')))
+  return (questions || []).filter((q) => q && q.blocking && !questionClosed(q))
 }
 
 export function openBlockingQuestions(repo, id) {
   const r = readStudio(repo, id)
-  if (r.state !== 'ok') return []
+  if (!r.session) return [{ id: 'session', text: `studio session ${id} is ${r.state}`, status: 'invalid' }]
   return openBlocking(r.questions, r.questionsInvalid)
 }
 
@@ -357,8 +384,23 @@ function loadForWrite(repo, id) {
   const r = readStudio(repo, id)
   if (r.state === 'missing') throw new StudioError('E_NO_SESSION', `studio session not found: ${id}`)
   if (r.state === 'empty') throw new StudioError('E_EMPTY_SESSION', `studio session ${id} has no session.json`)
-  if (r.state === 'corrupt') throw new StudioError('E_CORRUPT_SESSION', `studio session ${id} is corrupt: ${r.errors.join('; ')}`)
+  // session.json 损坏时没有可恢复的会话；关联证据损坏交给各操作具体的错误码。
+  if (!r.session) throw new StudioError('E_CORRUPT_SESSION', `studio session ${id} is corrupt: ${r.errors.join('; ')}`)
   return r
+}
+
+/**
+ * 把一段修订记录追加到纪要末尾：拒绝原因和用户处理都必须留在落盘证据里。
+ * 纪要不存在时不做任何事——不能凭空用修订记录冒充一份纪要。
+ */
+function appendMinutesRevision(dir, text) {
+  const body = String(text || '').trim()
+  if (!body) return
+  const file = path.join(dir, 'minutes-final.md')
+  const prev = readText(file)
+  if (!prev.ok) return
+  const head = prev.value.trim() ? prev.value.replace(/\s+$/, '') + '\n\n' : ''
+  writeText(file, head + body + '\n')
 }
 
 export function createSession(repo, { id, title, input }, { config, projectCfg = {}, overrides = {} } = {}) {
@@ -453,7 +495,7 @@ function scribePrompt(session, questions) {
   return lines.join('\n')
 }
 
-function confirmPrompt(role, session, decisions, minutes) {
+function confirmPrompt(role, session, decisions, minutes, questions) {
   return [
     `你是本次 Studio 讨论的${ROLE_LABEL[role]}（${role}），现在独立确认最终纪要与决策。这是只读操作：不要修改、创建或删除任何文件。`,
     '',
@@ -465,6 +507,9 @@ function confirmPrompt(role, session, decisions, minutes) {
     '',
     '决策：',
     decisions.map((d) => `${d.id} ${d.title}：${d.detail || ''}（默认：${d.default || '无'}）`).join('\n') || '(无)',
+    '',
+    '问题与用户处理（含上一轮拒绝后的答复；没有用户回答的问题不算已确认）：',
+    JSON.stringify(answeredQuestions(questions), null, 2),
     '',
     '请判断是否可以接受这些决策。最后只输出一个 JSON 对象（不要加代码块标记）：',
     '{"verdict":"accept|accept_with_notes|reject","notes":"说明"}',
@@ -626,6 +671,9 @@ function statusAfterStep(session, questions, decisions, extra = {}) {
   if (blocked.length) return { status: 'awaiting_user', blocking_reason: `${blocked.length} 个阻塞问题待回答` }
   if (extra.roundLimit) return { status: 'awaiting_user', blocking_reason: extra.roundLimit }
   if (extra.reject) return { status: 'awaiting_user', blocking_reason: 'expert_reject' }
+  if ((decisions || []).some((d) => Number(d.rounds_used || 0) > 2)) {
+    return { status: 'awaiting_user', blocking_reason: 'round_limit' }
+  }
   if (currentStep(session) === 'done') {
     return allDecisionsConfirmed(decisions)
       ? { status: 'ready', blocking_reason: null }
@@ -651,6 +699,13 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
       : ''
     throw new StudioError('E_AWAITING_USER', `awaiting_user: ${blocked.map((q) => q.id).join(', ')} must be answered before running${extra}`)
   }
+  // 轮次耗尽是硬停：不再进入第三轮讨论，也不替用户或专家做确认。
+  if (r.decisions.some((d) => Number(d.rounds_used || 0) > 2)) {
+    throw new StudioError(
+      'E_ROUNDS_EXHAUSTED',
+      'decision rounds exhausted (>2): G0 cannot pass; stop instead of starting another discussion round',
+    )
+  }
   const step = currentStep(session)
   if (step === 'done') {
     const ok = allDecisionsConfirmed(r.decisions)
@@ -674,7 +729,7 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     prompt = scribePrompt(session, r.questions)
   } else {
     providerRole = CONFIRM_TARGET[step]
-    prompt = confirmPrompt(providerRole, session, r.decisions, r.minutes)
+    prompt = confirmPrompt(providerRole, session, r.decisions, r.minutes, r.questions)
   }
 
   let result
@@ -749,6 +804,17 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
         created_at: nowIso(),
       }]
       writeJson(path.join(dir, 'questions.json'), questions)
+      // 其他专家的确认是针对拒绝前的旧证据：作废，修订后必须各自重新独立确认。
+      for (const role of EXPERTS) {
+        if (role === providerRole) continue
+        try { fs.rmSync(path.join(dir, 'confirmations', `${role}.json`), { force: true }) } catch { /* ignore */ }
+      }
+      const round = Math.max(1, ...decisions.map((d) => Number(d.rounds_used || 0)))
+      appendMinutesRevision(dir, [
+        `## 修订记录（第 ${round} 轮）`,
+        `- 专家 ${providerRole} 拒绝：${record.notes || '未说明原因'}`,
+        '- 状态：等待用户处理',
+      ].join('\n'))
     }
   }
 
@@ -759,8 +825,8 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     if (decisions.some((d) => Number(d.rounds_used || 0) > 2)) {
       roundLimit = 'round_limit'
     } else {
-      // 撤掉这一步，等用户处理后再由该专家独立重新确认。
-      doneSteps = doneSteps.filter((s) => s !== step)
+      // 撤掉全部确认步骤：修订后的纪要和决策要三位专家重新各自确认。
+      doneSteps = doneSteps.filter((s) => !CONFIRM_TARGET[s])
     }
   }
   const outputs = { ...(session.outputs || {}) }
@@ -801,7 +867,8 @@ export function answerStudio(repo, id, { question, decision, text, adoptDefault 
     const idx = questions.findIndex((q) => q.id === question)
     if (idx < 0) throw new StudioError('E_NO_QUESTION', `question not found: ${question}`)
     const q = questions[idx]
-    if (q.status !== 'open') throw new StudioError('E_QUESTION_CLOSED', `question ${question} is ${q.status}`)
+    // 只有带有效用户动作的关闭状态才算真的关闭；否则允许补答（例如手工改坏的状态字段）。
+    if (q.status !== 'open' && questionClosed(q)) throw new StudioError('E_QUESTION_CLOSED', `question ${question} is ${q.status}`)
     if (adoptDefault && !q.default) throw new StudioError('E_NO_DEFAULT', `question ${question} has no default`)
     const link = q.decision ? decisions.find((d) => d.id === q.decision) : null
     const rounds = Math.max(Number(q.rounds_used || 0), link ? Number(link.rounds_used || 0) : 0)
@@ -821,6 +888,10 @@ export function answerStudio(repo, id, { question, decision, text, adoptDefault 
       writeJson(path.join(dir, 'decisions.json'), decisions)
     }
     writeJson(path.join(dir, 'questions.json'), questions)
+    // 专家拒绝的答复也是证据：留在纪要的修订记录里，后续确认必须看到它。
+    if (q.kind === 'expert_reject') {
+      appendMinutesRevision(dir, `- 用户处理（${action.kind}）：${action.text}`)
+    }
   } else {
     const idx = decisions.findIndex((d) => d.id === decision)
     if (idx < 0) throw new StudioError('E_NO_DECISION', `decision not found: ${decision}`)
@@ -861,7 +932,9 @@ function evidenceContent(dir) {
  */
 export function evaluateG0(repo, id, { now } = {}) {
   const r = readStudio(repo, id)
-  if (r.state !== 'ok') {
+  // 没有可读会话时无法求值：缺失是 not_evaluated，损坏是 fail。
+  // 会话本身可读、但关联证据损坏时继续逐项求值（对应 check 会失败）。
+  if (!r.session) {
     return {
       gate: 'G0', pass: false, status: r.state === 'missing' ? 'not_evaluated' : 'fail',
       failed: ['G0.session'], checks: [], errors: r.errors.length ? r.errors : [`studio session ${id} is ${r.state}`],
@@ -881,15 +954,17 @@ export function evaluateG0(repo, id, { now } = {}) {
     ...decisions.filter((d) => Number(d.rounds_used || 0) > 2).map((d) => d.id),
   ]
   // 独立有效确认：必须来自该角色自己的模型，且带结论与时间；别人代写的确认不算。
+  // 记录里的 expert 必须等于角色本身（缺失也不行），model 必须等于该角色被分配的模型
+  // （角色没有分配模型时同样无法证明独立确认）。
   const roleModel = (role) => session.roles?.[role]?.model || null
   const missingConf = EXPERTS.filter((role) => {
     const c = confirmations[role]
     if (!c || typeof c !== 'object') return true
-    if (c.expert && c.expert !== role) return true
+    if (c.expert !== role) return true
     if (!['accept', 'accept_with_notes'].includes(c.verdict)) return true
     if (!c.model || !c.at) return true
     const assigned = roleModel(role)
-    if (assigned && c.model !== assigned) return true
+    if (!assigned || c.model !== assigned) return true
     return false
   })
   const rejected = EXPERTS.filter((role) => confirmations[role] && confirmations[role].verdict === 'reject')
