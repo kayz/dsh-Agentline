@@ -1,0 +1,17 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "5c005cbb47e87d97d5e0756c784f5877bc42e525",
+  "passed": 3,
+  "total": 5,
+  "findings": [
+    {"severity": "P1", "description": "来源 G0 失败可通过豁免绕过，失效来源仍可批准和物化。", "evidence": "orchestrator/lib/blueprint.mjs:1082-1087,1105-1107,1171,1195-1203,1245-1253,1391-1399; orchestrator/lib/contracts/gate.mjs:102-109; orchestrator/test/blueprint-g1.test.mjs:431-447"},
+    {"severity": "P1", "description": "G1 重读落盘任务图时未校验任务标题，也未拒绝空 tasks 和 acceptance，可能批准和物化无效任务图。", "evidence": "orchestrator/lib/blueprint.mjs:638-673,692,984-1017,1041-1052,1056-1066,1347-1353"}
+  ],
+  "results": [
+    {"id": "AC-1", "pass": true, "evidence": ".collab/tasks/004/ci-results.json: AC-1 exitCode 0, AC-1 OK"},
+    {"id": "AC-2", "pass": false, "evidence": "CI AC-2 exitCode 0, 4 passed, AC-2 OK; blueprint.mjs:1171,1245-1253,1391-1399 允许豁免来源失效后批准及物化"},
+    {"id": "AC-3", "pass": false, "evidence": "CI AC-3 exitCode 0, 21 passed, AC-3 OK; blueprint.mjs:984-1017,1041-1066,1171 存在未阻断的任务图和来源反例"},
+    {"id": "AC-4", "pass": true, "evidence": "CI AC-4 exitCode 0, 7 passed, AC-4 OK; plugin/test/blueprint-ui.test.mjs 覆盖真实、空、错误、项目切换与动作"},
+    {"id": "AC-5", "pass": true, "evidence": "CI AC-5 exitCode 0, orchestrator 136 passed, plugin 17 passed, AC-5 OK"}
+  ]
+}
