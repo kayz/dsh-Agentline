@@ -17,4 +17,11 @@
 ## 约束
 
 - 从 P7 合并后的 `main` 创建 `task/005`。
-- dev 使用 `deepseek-v4-pro`。
+- dev 使用 `cursor-wsl-grok-4.7`（WSL Cursor）。
+
+
+## 验收格式（必须）
+
+`acceptance.md` 必须使用 `tools/ci-runner.ps1` 可解析格式：每个 `## AC-n` 下一个 ```pwsh 代码块，最后一行输出 `AC-n OK`，并写明期望。
+
+至少覆盖：插件语法；Build 来源校验；K1 step/runBuild 到 pr_open；T gate 缺失证据；角色锁/实际身份；Build UI 真实/空/错误状态；完整回归。
