@@ -526,6 +526,34 @@ window.__ModuleLoader__.load({
           ),
         ) : null,
         err ? h('div', { className: 'agl-empty' }, err) : null,
+        h('div', { className: 'agl-sec' },
+          h('h4', null, '项目组合'),
+          h('div', {
+            style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '8px' },
+          }, projects.map((p) => {
+            const on = p.path === project
+            const total = (p.tasks && p.tasks.total) || 0
+            const active = (p.tasks && p.tasks.active) || 0
+            const last = (p.tasks && p.tasks.last) || null
+            return h('div', {
+              key: p.path,
+              title: p.path,
+              onClick: () => { setProject(p.path); setCurrent(null); setDetail(null) },
+              style: {
+                cursor: 'pointer', padding: '8px 10px', borderRadius: '8px',
+                border: '1px solid ' + (on ? 'rgba(88,166,255,.55)' : 'rgba(255,255,255,.1)'),
+                background: on ? 'rgba(88,166,255,.08)' : 'rgba(255,255,255,.02)',
+              },
+            },
+              h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+                h('b', null, p.title),
+                on ? h('span', { className: 'agl-fine' }, '当前') : null,
+              ),
+              h('div', { className: 'agl-fine', style: { marginTop: '4px' } },
+                `${total} 个任务 · 进行中 ${active}` + (last ? ` · 最近 ${last}` : '')),
+            )
+          })),
+        ),
         h('div', { className: 'agl-body' },
           h('div', { className: 'agl-list' },
             tasks.length === 0
