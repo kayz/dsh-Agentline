@@ -1,0 +1,50 @@
+{
+    "verdict":  "needs_revision",
+    "git_sha":  "ad27fef64453c126617c8a83b01f5326baa2ecce",
+    "passed":  4,
+    "total":  7,
+    "findings":  [
+                     {
+                         "evidence":  "orchestrator/lib/step.mjs:203-212,228-229,241-251; orchestrator/lib/git.mjs:65-68; orchestrator/lib/build.mjs:455-475,535-547; orchestrator/test/build-execution.test.mjs:68,91-101",
+                         "description":  "正常 Build 在 CI 和评审后提交评审产物与 PR 状态，T gate 却以最新 HEAD 检查 CI 时间与评审 SHA，导致评审过期，CI 也可能过期。",
+                         "severity":  "P1"
+                     }
+                 ],
+    "results":  [
+                    {
+                        "evidence":  "ci-results.json AC-1: exitCode 0, AC-1 OK",
+                        "pass":  true,
+                        "id":  "AC-1"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-2: exitCode 0, 3 项通过; orchestrator/lib/build.mjs:183-241; orchestrator/lib/step.mjs:108",
+                        "pass":  true,
+                        "id":  "AC-2"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-3: exitCode 0, 4 项通过; orchestrator/lib/step.mjs:203-212,228-251; orchestrator/lib/build.mjs:455-475,535-547",
+                        "pass":  false,
+                        "id":  "AC-3"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-4: exitCode 0, 4 项通过; orchestrator/lib/build.mjs:415-452,455-475,535-547",
+                        "pass":  false,
+                        "id":  "AC-4"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-5: exitCode 0, 4 项通过; orchestrator/lib/step.mjs:125-156; orchestrator/lib/build.mjs:300-319,574-602",
+                        "pass":  true,
+                        "id":  "AC-5"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-6: exitCode 0, 3 项通过; orchestrator/lib/build.mjs:717,750-755",
+                        "pass":  false,
+                        "id":  "AC-6"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-7: exitCode 0; orchestrator 179 项、插件 20 项通过; AC-7 OK",
+                        "pass":  true,
+                        "id":  "AC-7"
+                    }
+                ]
+}
