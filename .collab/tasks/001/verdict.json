@@ -1,6 +1,6 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "e83e074d92a6357375064a73795c735b568e07e5",
+  "git_sha": "96b586d468e2bba1a4ad892a2e1993b2a588fdc6",
   "passed": 13,
   "total": 14,
   "findings": [
@@ -11,8 +11,8 @@
     }
   ],
   "evidence": [
-    "验证 SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，值为 e83e074d92a6357375064a73795c735b568e07e5；解压 loose commit object 后 SHA1 一致，两个产品文件统一 CRLF/LF 后与该提交 blob 一致。未执行 git 命令。",
-    "执行证据采用 ci-results.json:4，ranAt=2026-11-06T18:21:57.0922218+08:00；14 条命令均 exitCode=0。CI SHA256=1fa3e78dde631e3d30349066c84a039130a60434359c9cb0fc891676f3eb711f；client.js SHA256=527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a；index.js SHA256=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157。",
+    "验证 SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，值为 96b586d468e2bba1a4ad892a2e1993b2a588fdc6；解压 loose commit object 后 SHA1 一致，两个产品文件统一 CRLF/LF 后与该提交 blob 一致。未执行 git 命令。",
+    "执行证据采用 ci-results.json:4，ranAt=2026-11-06T18:30:34.7986045+08:00；14 条命令均 exitCode=0。CI SHA256=523808991c4a9658b6834f96c6b40617b1ee9784de749ea144a13e8a55adea44；client.js SHA256=527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a；index.js SHA256=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157。本轮重新核对代码与提交对象，并提取当前实现函数，在内存中复现 finding。",
     "AC-1 通过：ci-results.json:10–16，exitCode=0，output 为空。",
     "AC-2 通过：ci-results.json:19–25，exitCode=0，output 为空。",
     "AC-3 通过：ci-results.json:28–34，exitCode=0，OK tabs+home；client.js:61–74、108–119、532–609、630–680、994–1002 核对页签、首页、端点、持久化与页面分派。",

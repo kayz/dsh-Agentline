@@ -4,15 +4,15 @@
 
 needs_revision；独立评审通过 **13/14**。AC-6 不通过，其余验收项通过。编排方本轮 CI 的 14 项命令均退出 0；静态文案检查未覆盖下述错误状态被项目轮询清除的行为。
 
-验证的 git SHA：`e83e074d92a6357375064a73795c735b568e07e5`。只读 `.git:1` → `C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1` → `C:/git/dsh-Agentline/.git/refs/heads/task/001:1`，解压对应 loose commit object 并计算 SHA1，与该 SHA 一致；两个产品文件统一 CRLF/LF 后与该提交的 blob 一致。未执行 git 命令。
+验证的 git SHA：`96b586d468e2bba1a4ad892a2e1993b2a588fdc6`。只读 `.git:1` → `C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1` → `C:/git/dsh-Agentline/.git/refs/heads/task/001:1`，解压对应 loose commit object 并计算 SHA1，与该 SHA 一致；两个产品文件统一 CRLF/LF 后与该提交的 blob 一致。未执行 git 命令。
 
-执行类验收采用 `.collab/tasks/001/ci-results.json:4` 的 `2026-11-06T18:21:57.0922218+08:00` 运行证据，未重跑验收命令。AC-9 首段与 AC-13 命令相同，其运行证据共用；AC-12 和 AC-14 现已分别包含正确输出，不再沿用历史报告中的证据缺失结论。
+执行类验收采用 `.collab/tasks/001/ci-results.json:4` 的 `2026-11-06T18:30:34.7986045+08:00` 运行证据，未重跑验收命令。AC-9 首段与 AC-13 命令相同，其运行证据共用；AC-12 和 AC-14 现已分别包含正确输出，不再沿用历史报告中的证据缺失结论。本轮重新核对规格、代码行号与提交对象，并直接提取当前实现的函数，在内存中复现下述问题。
 
 本轮只读计算的 SHA256：
 
 - `plugin/lib/client.js`：`527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a`
 - `plugin/lib/index.js`：`6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157`
-- `.collab/tasks/001/ci-results.json`：`1fa3e78dde631e3d30349066c84a039130a60434359c9cb0fc891676f3eb711f`
+- `.collab/tasks/001/ci-results.json`：`523808991c4a9658b6834f96c6b40617b1ee9784de749ea144a13e8a55adea44`
 
 本轮仅更新 review.md、verdict.json，保留其他轮次文件。brief 未指定额外验收报告路径。未在 DSH 中执行人工观察；按 acceptance.md:351 的约定，不计为自动验收失败。未因评审环境或临时权限限制扣分。仓库未发现 scripts/check-fast.ps1。
 
