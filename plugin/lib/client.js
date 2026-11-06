@@ -272,6 +272,7 @@ window.__ModuleLoader__.load({
       // 访问代次区分 A → B → A；任务代次同时隔离同项目内的切换和写操作反馈。
       const view = React.useRef({ alive: true, epoch: 0, taskEpoch: 0 })
       const requests = React.useRef({})
+      const loaded = React.useRef({ routing: false, pipeline: false, list: false })
       Object.assign(view.current, { project, task: current, mode: logMode })
       const begin = (key) => { const n = (requests.current[key] || 0) + 1; requests.current[key] = n; return n }
       const scope = () => ({ ...view.current })
@@ -303,6 +304,9 @@ window.__ModuleLoader__.load({
         setPipeline(null); setRouting(null); setDraft({}); setRouteMsg(''); setSaving(false)
         setPendingFocus(null); setErr(null)
         setSourceErrors((e) => ({ ...e, routing: '' }))
+        loaded.current.routing = false
+        loaded.current.pipeline = false
+        loaded.current.list = false
       }
       const openTask = (projectPath, taskId) => {
         setTab('build')
@@ -425,7 +429,8 @@ window.__ModuleLoader__.load({
         const r = await j('/agentline/routing?project=' + encodeURIComponent(proj))
         if (!latest('routing', n, s)) return
         sourceError('routing', r && r.ok ? '' : failure(r))
-        if (!r || !r.ok) { setRouting(null); setDraft({}); return }
+        if (!r || !r.ok) { loaded.current.routing = false; setRouting(null); setDraft({}); return }
+        loaded.current.routing = true
         setRouting(r)
         const d = {}
         for (const role of ['design', 'dev', 'review']) {
@@ -488,6 +493,11 @@ window.__ModuleLoader__.load({
           const exists = wanted && list.some((x) => x.path === wanted)
           const target = focus && exists ? focus : (view.current.project || (exists ? wanted : (p.default || (list[0] && list[0].path) || null)))
           if (target !== view.current.project) switchProject(target)
+          else if (target) {
+            if (!loaded.current.routing) loadRouting(target)
+            if (!loaded.current.pipeline) loadPipeline(target)
+            if (!loaded.current.list) loadList(target)
+          }
           if (focusTaskId) { setPendingFocus({ project: target, task: focusTaskId }); setTab('build') }
         }
       }
@@ -498,7 +508,8 @@ window.__ModuleLoader__.load({
         const q = proj ? '?project=' + encodeURIComponent(proj) : ''
         const [t, m] = await Promise.all([j('/agentline/tasks' + q), j('/agentline/metrics')])
         if (!latest('list', n, s)) return
-        if (!t || !t.ok) { setErr((t && t.error) || '无法读取任务列表'); setListReady(false); return }
+        if (!t || !t.ok) { loaded.current.list = false; setErr((t && t.error) || '无法读取任务列表'); setListReady(false); return }
+        loaded.current.list = true
         setErr(null)
         setListReady(true)
         setTasks(t.tasks || [])
@@ -535,6 +546,7 @@ window.__ModuleLoader__.load({
         if (!latest('pipeline', n, s)) return
         setPipeline(r && r.ok && r.summary ? { ok: true, summary: r.summary } :
           { ok: false, error: (r && r.error) || '读取失败（宿主可能未提供 /agentline/pipeline）' })
+        loaded.current.pipeline = !!(r && r.ok && r.summary)
       }
       const loadCatalog = async () => {
         const n = begin('catalog')
