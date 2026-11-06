@@ -1,0 +1,39 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "918a770cae725a3bcd6f00d856d94fdf8c3a4c1a",
+  "passed": 9,
+  "total": 12,
+  "findings": [
+    {
+      "id": "AC-6",
+      "severity": "P2",
+      "problem": "首次 /agentline/projects 失败时 project/pipeline/routing 保持空值；依赖页面持续显示读取中，重新进入页面或现有轮询不能恢复。client.js:422–423、455–460、519–520、558–580、671、747；违反 design.md:279。需传播项目错误并支持重入或轮询恢复。详见 review.md 问题清单第 1 条。"
+    },
+    {
+      "id": "AC-9",
+      "severity": "P2",
+      "problem": "缺少 acceptance.md:80–83 五页渲染与默认首页命令的 CI 运行证据。ci-results.json:82–88 仅记录第二段 OK data projection+navigation；ci-runner.ps1:45、54、60 导致首段被覆盖。请编排方补执行原首段并记录退出码与 OK render 5 tabs，不修改断言。"
+    },
+    {
+      "id": "AC-12",
+      "severity": "P2",
+      "problem": "缺少 acceptance.md:327–334 无未跟踪文件命令的 CI 运行证据。ci-results.json:109–115 仅记录第一段 OK write scope；ci-runner.ps1:60、65 导致末项第二段未被执行。请编排方补执行原第二段并记录退出码与 OK no untracked files；review 不执行 git。"
+    }
+  ],
+  "evidence": [
+    "SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，值为 918a770cae725a3bcd6f00d856d94fdf8c3a4c1a；未执行 git。当前评审文件 SHA256 记录在 review.md。",
+    "AC-1 通过：ci-results.json:10–16，exitCode=0，output 为空。",
+    "AC-2 通过：ci-results.json:19–25，exitCode=0，output 为空。",
+    "AC-3 通过：ci-results.json:28–34，exitCode=0，OK tabs+home；client.js:61–74、108–119、455–570、617–665、980–987 核对布局、数据端点、首页和页签。",
+    "AC-4 通过：ci-results.json:37–43，exitCode=0，OK legacy ops；client.js:318–385、800–974 保留原任务操作、阶段、ledger、回答和日志；278–316、483–587 核对请求隔离与清理，163–232、1000 起保留插件设置及头部入口。",
+    "AC-5 通过：ci-results.json:46–52，exitCode=0，OK no mock data；client.js:669–703、918–927 按数据投影会话、目录和模型，gate 明示未实现。",
+    "AC-6 不通过：ci-results.json:55–61 静态命令 exitCode=0、OK empty states，但 client.js:455–460、519–520、671、747 的首次项目读取失败路径违背 design.md:279；详见 finding AC-6。",
+    "AC-7 通过：ci-results.json:64–70，exitCode=0，OK settings+slash；client.js:661–665、688–703、744–797 核对复制入口、角色路由/矩阵与只读目录/Provider。依赖项目加载问题归入 AC-6。",
+    "AC-8 通过：ci-results.json:73–79，exitCode=0，OK host routes 14；index.js:550–852 旧路由，855–874 新路由，857、868 检查 GET，872–873 使用原始发现缓存且不返回原始配置。",
+    "AC-9 无法确认完整通过：ci-results.json:82–88，第二段 exitCode=0、OK data projection+navigation；缺 acceptance.md:80–83 的 OK render 5 tabs，原因见 ci-runner.ps1:45、54、60。",
+    "AC-10 通过：ci-results.json:91–97，exitCode=0，OK host routes runtime；隔离夹具断言覆盖空/有会话、发现目录、非 GET 拒绝、旧 projects 和目录不变；index.js:855–874 与证据一致。",
+    "AC-11 通过：ci-results.json:100–106，exitCode=0，# tests 71、# pass 64、# fail 0、# skipped 7。",
+    "AC-12 无法确认完整通过：ci-results.json:109–115，第一段 exitCode=0、OK write scope；design.md:1–5 仅列两个产品文件。缺 acceptance.md:327–334 的 OK no untracked files，原因见 ci-runner.ps1:60、65。",
+    "CI 自报 12/12；独立评审为 9/12（AC-6 不通过，AC-9/AC-12 运行证据不全）。接受已有 CI 执行证据，未因环境限制判失败。brief 无其他验收报告路径；仅创建 review.md、verdict.json；DSH 人工观察未执行，未计为自动验收失败。"
+  ]
+}

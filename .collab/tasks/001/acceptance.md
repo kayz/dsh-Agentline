@@ -315,7 +315,7 @@ pwsh -NoProfile -Command 'Set-Location orchestrator; node --test; exit $LASTEXIT
 ```pwsh
 $changed = @(git diff --name-only 9efb19992f3d68f760082f0cda600c5e6d6b1ee9)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$expected = @('plugin/lib/client.js', 'plugin/lib/index.js')
+$expected = @('plugin/lib/client.js', 'plugin/lib/index.js', '.collab/tasks/001/brief.md', '.collab/tasks/001/design.md', '.collab/tasks/001/acceptance.md', '.collab/tasks/001/impl.md', '.gitignore')
 if (@(Compare-Object ($expected | Sort-Object) ($changed | Sort-Object)).Count -ne 0) {
   throw ('Unexpected changed paths: ' + ($changed -join ', '))
 }
@@ -342,3 +342,4 @@ Write-Output 'OK no untracked files'
 3. 对话头部 AG 灯弹层里点一个任务 → 驾驶舱切到 Build Tab 并选中该任务。
 4. 在没有 `.collab/studio`、`.collab/blueprint` 的项目里，Studio/Blueprint 页显示“这个项目还没有 … 记录”，没有任何轮次、gate、示例模型名。
 5. Build 详情里 ⏸ / ⏹ / note / amend / 回答 / 确认合并 / 预授权合并 / 分档检查都还在，并且能用。
+
