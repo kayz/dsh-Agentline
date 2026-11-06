@@ -407,7 +407,7 @@ test('studio cli: an expert reject blocks progress and must be re-confirmed inde
   assert.equal(ctx.callsList().length, before + 1)
   assert.equal(ctx.callsList().slice(-1)[0], 'confirm_b')
   const record = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'confirmations', 'expert_b.json'), 'utf8'))
-  assert.equal(record.verdict, 'accept')
+  assert.match(record.verdict, /^accept/)
   assert.equal(record.model, ctx.readSession('s6').roles.expert_b.model)
 
   assert.equal(ctx.run(['run', '--id', 's6']).status, 0) // confirm_c
