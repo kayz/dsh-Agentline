@@ -93,8 +93,15 @@ export function runProcess({
 
   return new Promise((resolve) => {
     let child
+    let resolved
     try {
-      child = spawn(command, [...prefixArgs, ...args], {
+      resolved = resolveCommand(command)
+    } catch (e) {
+      resolve({ exitCode: -1, stdout: '', stderr: e.message, timedOut: false, spawnError: e.message, abortedReason: null })
+      return
+    }
+    try {
+      child = spawn(resolved.command, [...resolved.prefixArgs, ...prefixArgs, ...args], {
         cwd,
         windowsHide: true,
         env: env || process.env,
