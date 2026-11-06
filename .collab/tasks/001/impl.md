@@ -24,3 +24,5 @@
 本次复核保留工作区已有的五个 Tab、Build 操作和只读 Host 路由，仅补充修正 `client.js` 首页“现在卡在哪”的兜底分支：summary 无待处理项但 live 请求尚未完成时显示“读取中…”，live 失败时显示该数据源错误，成功且为空才显示“没有需要你处理的事项。”。已有阻塞、问题和合并待办仍优先展示，符合 design.md 对加载、错误和空数据分支的要求；本次没有再次修改 `index.js`。
 
 修正后重新执行 AC-1 至 AC-10 的全部原 JavaScript 断言，退出码均为 0，输出与验收期望一致；未修改验收断言。补充内存快照验证 live 加载、失败、成功为空及问题优先级，输出 `OK live loading+failure+empty priority`。本次 orchestrator `node --test` 退出码为 0，汇总仍为 71 tests、64 pass、0 fail、7 skipped。再次确认两个产品文件无 BOM，且不存在 `scripts/check-fast.ps1`。工具仍未提供可用的 pwsh 7，故通过 Node 直接执行原断言；未执行 AC-12 的 git 命令，未创建仓库内测试文件，DSH 人工观察仍待 review。
+
+本轮复核保留现有产品实现：两条 Host 路由均为只读转发，非 GET 返回 405；客户端已有五页、数据投影与请求代次保护。再次执行两个 `node --check` 均退出 0；在 orchestrator 目录直接运行 `node --test` 输出 71 项、64 通过、0 失败、7 跳过。测试内部调用了 Git 夹具，发现后未继续执行任何 Git 范围检查。本轮环境未找到 PowerShell 7，未重新运行验收中的 PowerShell 多步骤脚本，也未复核 DSH 中的实际布局和交互；上文其他检查结果为此前工作区记录，不代表本轮重跑。
