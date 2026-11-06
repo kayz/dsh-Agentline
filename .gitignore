@@ -4,5 +4,14 @@ orchestrator/config/*.local.json
 orchestrator/config/agentline.models.json
 orchestrator/data/
 node_modules/
-.collab/
+.collab/*
+!.collab/tasks/
+!.collab/tasks/001/
+!.collab/tasks/001/**
+.collab/tasks/001/logs/
+.collab/tasks/001/run.json
+.collab/tasks/001/state.json
+.collab/tasks/001/notice.json
+.collab/tasks/001/live.json
+.collab/tasks/001/ci-results.json
 *.log
