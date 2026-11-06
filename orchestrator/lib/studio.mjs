@@ -747,9 +747,11 @@ function normalizeDecisions(parsed, existing) {
 }
 
 function statusAfterStep(session, questions, decisions, extra = {}) {
+  // 刚刚发生的专家拒绝优先于“还有 N 个阻塞问题”：拒绝本身会落一条 open 问题，
+  // 但会话原因必须是 expert_reject，否则调用方无法区分普通阻塞与拒绝后的等待。
+  if (extra.reject) return { status: 'awaiting_user', blocking_reason: 'expert_reject' }
   const blocked = openBlocking(questions, false)
   if (blocked.length) return { status: 'awaiting_user', blocking_reason: `${blocked.length} 个阻塞问题待回答` }
-  if (extra.reject) return { status: 'awaiting_user', blocking_reason: 'expert_reject' }
   // 2/2 已用满或轮次无法证明、且下一步仍要开启讨论时停住：
   // 不自动选默认、也不进入第三轮。讨论已结束、只剩确认时不算“还有阻塞”，可以继续。
   const exhausted = (decisions || []).filter((d) => roundsExhausted(d))

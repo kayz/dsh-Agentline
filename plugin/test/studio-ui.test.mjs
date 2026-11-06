@@ -209,10 +209,21 @@ function change(root, node, value) {
   root.flush()
 }
 
-async function settle(root, rounds = 10) {
+function delay(ms) { return new Promise((r) => setTimeout(r, ms)) }
+
+/**
+ * 等到渲染稳定，并且进行中的 fetch（含真实 CLI 子进程）结束。
+ * 只让出 10 个 setTimeout(0) 时，子进程往往还没写日志，断言会读到空调用记录。
+ */
+async function settle(root, rounds = 200) {
   for (let i = 0; i < rounds; i++) {
     root.flush()
-    await new Promise((r) => setTimeout(r, 0))
+    if (fetchInflight === 0 && !root.dirty) {
+      await delay(0)
+      root.flush()
+      if (fetchInflight === 0 && !root.dirty) return
+    }
+    await delay(fetchInflight > 0 ? 25 : 0)
   }
   root.flush()
 }
@@ -346,16 +357,23 @@ function makeServer(overrides = {}) {
 }
 
 let fetchCalls = []
+let fetchInflight = 0
 function installFetch(server) {
   fetchCalls = []
+  fetchInflight = 0
   globalThis.fetch = async (url, opts = {}) => {
-    const u = String(url)
-    fetchCalls.push({ url: u, method: (opts.method || 'GET').toUpperCase(), body: opts.body ? JSON.parse(opts.body) : null })
-    let payload = { ok: true }
-    for (const r of server.routes) {
-      if (u.indexOf(r.prefix) === 0) { payload = await r.fn(u, (opts.method || 'GET').toUpperCase(), opts); break }
+    fetchInflight++
+    try {
+      const u = String(url)
+      fetchCalls.push({ url: u, method: (opts.method || 'GET').toUpperCase(), body: opts.body ? JSON.parse(opts.body) : null })
+      let payload = { ok: true }
+      for (const r of server.routes) {
+        if (u.indexOf(r.prefix) === 0) { payload = await r.fn(u, (opts.method || 'GET').toUpperCase(), opts); break }
+      }
+      return { status: (payload && payload.__status) || 200, json: async () => payload }
+    } finally {
+      fetchInflight--
     }
-    return { status: (payload && payload.__status) || 200, json: async () => payload }
   }
 }
 

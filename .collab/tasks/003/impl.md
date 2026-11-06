@@ -282,6 +282,21 @@ Push-Location orchestrator; try { & npm test } finally { Pop-Location }
 本轮同样处于禁用 shell 的执行环境（Bash / PowerShell 都无审批可用），**未能本机重跑**五条验收命令；
 改动按 `node --check` 的语法约束与逐条断言做了静态核对。
 
+## 第五轮修订（CI AC-2 / AC-5：`blocking_reason` 被问题计数盖住）
+
+| finding | 原因 | 修正 |
+|---|---|---|
+| `studio cli: two rounds are the hard cap...` 断言 `blocking_reason === 'expert_reject'`，实际是 `1 个阻塞问题待回答` | 拒绝一定会写一条 `kind=expert_reject` 的 open 问题。`statusAfterStep` 先看 `openBlocking`，于是 `extra.reject` 分支永远走不到 | 专家拒绝优先：`extra.reject` 时状态仍是 `awaiting_user`，原因记为 `expert_reject`。open 问题还在，`run` 仍被 `E_AWAITING_USER` 拦住，轮次保持 `[2,2]`，不开启第三轮讨论 |
+
+行为没有放宽：未回答前不能再调用角色，`conclude` 仍然失败。只是把已经发生的拒绝写进会话原因，而不是用问题条数代替。
+
+自测（仓库根）：
+
+- `node --check`：`plugin/lib/client.js`、`plugin/lib/index.js`、`orchestrator/agentline.mjs`、`orchestrator/lib/studio.mjs` 均通过。
+- `node --test --test-name-pattern "two rounds are the hard cap" orchestrator/test/studio-cli.test.mjs`：1 通过。
+- `cd orchestrator && npm test`：108 通过，0 失败（含 studio-cli 与 studio-g0）。
+- `node --test plugin/test/studio-ui.test.mjs`：10 通过。空闲机器上 `settle` 只让出 10 个 `setTimeout(0)` 时，CLI 子进程还没写日志，`new / run / answer / conclude` 会读到 0 次调用；现改为等到进行中的 fetch 结束再断言。行为断言未改。
+
 ## 已知边界
 
 - Blueprint / Build 新控制面不在本任务范围；Blueprint 页面仍为只读"未实现"。
