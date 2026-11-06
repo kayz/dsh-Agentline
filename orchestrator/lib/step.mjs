@@ -13,6 +13,9 @@ import { runCI } from './ci.mjs'
 import { effectiveRole } from './routing.mjs'
 import { commitAll, changedFiles, headSha } from './git.mjs'
 import { evaluateMerge } from './merge-policy.mjs'
+import { ensureTaskWorktree } from './worktree.mjs'
+import { acquireTaskLock, releaseTaskLock, acquireCapacity, releaseCapacity } from './registry.mjs'
+import { readWriteScope } from './scope.mjs'
 
 export const STEP_ORDER = ['design', 'dev', 'ci', 'review', 'pr']
 
@@ -142,27 +145,93 @@ export async function runStep({
 
 export default runStep
 
+function ledgerPath(taskDir) { return path.join(taskDir, 'step-ledger.jsonl') }
+
+export function appendStepEvent(taskDir, event) {
+  try {
+    fs.mkdirSync(taskDir, { recursive: true })
+    fs.appendFileSync(ledgerPath(taskDir), JSON.stringify({ at: new Date().toISOString(), ...event }) + '\n', 'utf8')
+  } catch { /* evidence is best-effort in P4.2 */ }
+}
+
+function copyTaskIntoWorktree(mainRepo, worktreeRepo, collabDir, taskId) {
+  const src = path.join(mainRepo, collabDir, String(taskId))
+  const dst = path.join(worktreeRepo, collabDir, String(taskId))
+  if (!fs.existsSync(src) || fs.existsSync(path.join(dst, 'state.json'))) return
+  fs.mkdirSync(path.dirname(dst), { recursive: true })
+  fs.cpSync(src, dst, { recursive: true, force: true })
+}
+
 /**
- * Minimal Supervisor loop for one task. It intentionally does not create a
- * worktree or acquire the task lock yet; those stay in the caller until the
- * full P4 integration. Each iteration executes exactly one step.
+ * Minimal Supervisor loop for one task.
+ *
+ * P4.2: creates/reuses a worktree, takes the task lock, acquires an execution
+ * slot before dev/review, and writes a step ledger. It still does not replace
+ * runFlow; flow.mjs remains the legacy/full Build entry point.
  */
 export async function runBuild({
-  config, repo, taskId, runnerPath, adapterFactory, log = console.log, projectCfg = {}, maxSteps = 10,
+  config, repo, taskId, runnerPath, adapterFactory, log = console.log, projectCfg = {},
+  maxSteps = 10, args = {},
 }) {
   const completed = []
-  for (let i = 0; i < maxSteps; i++) {
-    const taskDir = path.join(repo, config.collabDir, String(taskId))
-    const st = readState(taskDir)
-    const step = nextStep(st)
-    if (step === 'done' || step === 'resume') {
-      return { ok: step === 'done', status: st?.status || 'missing', next: step, steps: completed }
+  const wtCfg = config.worktree || {}
+  let runRepo = repo
+  let runDir = path.join(repo, config.collabDir, String(taskId))
+  let taskLock = null
+  let capacity = false
+  let worktree = null
+
+  const useWorktree = wtCfg.enabled !== false && !args.inPlace
+  try {
+    if (useWorktree) {
+      taskLock = await acquireTaskLock(repo, taskId)
+      if (!taskLock.ok) return { ok: false, status: 'blocked', next: 'blocked', reason: 'task_locked', steps: [] }
+      worktree = await ensureTaskWorktree(repo, taskId, {
+        baseRef: args.base || wtCfg.baseRef || 'main', dirRel: wtCfg.dir || '.collab/worktrees',
+      })
+      runRepo = worktree.path
+      copyTaskIntoWorktree(repo, runRepo, config.collabDir, taskId)
+      runDir = path.join(runRepo, config.collabDir, String(taskId))
     }
-    const r = await runStep({ config, repo, taskId, step, runnerPath, adapterFactory, log, projectCfg })
-    completed.push(r)
-    if (!r.ok) return { ok: false, status: r.status, next: r.next, reason: r.reason, steps: completed }
+
+    for (let i = 0; i < maxSteps; i++) {
+      const st = readState(runDir)
+      const step = nextStep(st)
+      if (step === 'done' || step === 'resume') {
+        return { ok: step === 'done', status: st?.status || 'missing', next: step, steps: completed, repo: runRepo }
+      }
+
+      if (step !== 'design' && !capacity) {
+        const scope = readWriteScope(path.join(runDir, 'design.md')) || ['**']
+        const cap = await acquireCapacity({
+          repo: runRepo, taskId, scope, worktree: runRepo, phase: step,
+          wait: !args['no-wait'] && config.concurrency?.wait !== false,
+          priority: Boolean(args.priority),
+          maxTasks: Number(args['max-tasks'] || config.concurrency?.maxTasks || 3),
+          pollMs: Math.max(1, Number(config.concurrency?.pollSeconds || 5)) * 1000,
+          log,
+        })
+        if (!cap.ok) return { ok: false, status: 'blocked', next: step, reason: 'capacity_wait', steps: completed, repo: runRepo }
+        capacity = true
+      }
+
+      appendStepEvent(runDir, { event: 'step.begin', task: taskId, step, status: st?.status || null })
+      const r = await runStep({
+        config, repo: runRepo, taskId, step, runnerPath, adapterFactory, log, projectCfg,
+      })
+      appendStepEvent(runDir, {
+        event: 'step.end', task: taskId, step, ok: r.ok, status: r.status,
+        next: r.next, reason: r.reason || null,
+      })
+      completed.push(r)
+      if (!r.ok) return { ok: false, status: r.status, next: r.next, reason: r.reason, steps: completed, repo: runRepo }
+    }
+    const st = readState(runDir)
+    return { ok: false, status: st?.status || 'unknown', next: nextStep(st), reason: 'step_budget_exceeded', steps: completed, repo: runRepo }
+  } finally {
+    if (capacity) await releaseCapacity(repo, taskId).catch(() => {})
+    if (taskLock && taskLock.ok) await releaseTaskLock(repo, taskId).catch(() => {})
   }
-  const st = readState(path.join(repo, config.collabDir, String(taskId)))
-  return { ok: false, status: st?.status || 'unknown', next: nextStep(st), reason: 'step_budget_exceeded', steps: completed }
 }
+
 
