@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { evaluateG0, concludeStudio, STEPS } from '../lib/studio.mjs'
+import { evaluateG0, concludeStudio, readStudio, STEPS } from '../lib/studio.mjs'
 
 const AT = '2026-11-06T00:00:00.000Z'
 
@@ -255,6 +255,75 @@ test('g0: more than two business rounds fails', (t) => {
   assert.equal(r.pass, false)
   assert.equal(check(r, 'G0.decision_rounds_le_2').pass, false)
   assert.match(check(r, 'G0.decision_rounds_le_2').evidence, /D-1/)
+})
+
+test('g0: rounds_used must be explicit, integral and within 0..2', (t) => {
+  for (const patch of [
+    { rounds_used: null },
+    { rounds_used: '1' },
+    { rounds_used: 1.5 },
+    { rounds_used: -1 },
+  ]) {
+    const { repo } = makeRepo()
+    t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+    const data = evidence()
+    data.decisions[0] = { ...data.decisions[0], ...patch }
+    materialize(repo, 'g0', data)
+    const r = evaluateG0(repo, 'g0')
+    assert.equal(r.pass, false, 'decision ' + JSON.stringify(patch))
+    assert.equal(check(r, 'G0.decision_rounds_le_2').pass, false)
+    assert.match(check(r, 'G0.decision_rounds_le_2').evidence, /D-1:invalid/)
+  }
+
+  // 缺失字段不能被当成 0
+  const missing = makeRepo()
+  t.after(() => fs.rmSync(missing.repo, { recursive: true, force: true }))
+  const data = evidence()
+  delete data.decisions[0].rounds_used
+  materialize(missing.repo, 'g0', data)
+  const r = evaluateG0(missing.repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.decision_rounds_le_2').pass, false)
+
+  // 问题轮次同样是证据
+  const qBad = makeRepo()
+  t.after(() => fs.rmSync(qBad.repo, { recursive: true, force: true }))
+  const data2 = evidence()
+  data2.questions[0] = { ...data2.questions[0], rounds_used: '2' }
+  materialize(qBad.repo, 'g0', data2)
+  const r2 = evaluateG0(qBad.repo, 'g0')
+  assert.equal(r2.pass, false)
+  assert.equal(check(r2, 'G0.decision_rounds_le_2').pass, false)
+  assert.match(check(r2, 'G0.decision_rounds_le_2').evidence, /Q-1:invalid/)
+})
+
+test('g0: scribe and moderator aliases of one model do not count as different', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const data = evidence()
+  data.session.roles.moderator = { model: 'mod-main', id: 'shared-model', tier: 'top', provider: 'claude' }
+  data.session.roles.scribe = { model: 'adv-alias', id: 'shared-model', tier: 'advanced', provider: 'claude' }
+  materialize(repo, 'g0', data)
+  const r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false, '同一个实际模型换了两个配置键仍然不能同时担任书记和主持')
+  assert.equal(check(r, 'G0.scribe_ne_moderator').pass, false)
+  assert.match(check(r, 'G0.scribe_ne_moderator').evidence, /claude:shared-model/)
+})
+
+test('g0: a corrupt confirmation file is a read error, not a missing confirmation', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  materialize(repo, 'g0', evidence())
+  fs.writeFileSync(path.join(repo, '.collab', 'studio', 'g0', 'confirmations', 'expert_a.json'), '{oops', 'utf8')
+
+  const read = readStudio(repo, 'g0')
+  assert.equal(read.state, 'corrupt')
+  assert.equal(read.confirmationsInvalid, true)
+  assert.match(read.errors.join('; '), /confirmations\/expert_a\.json/)
+
+  const r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.experts_confirmed').pass, false)
 })
 
 test('g0: scribe and moderator must be known and different', (t) => {

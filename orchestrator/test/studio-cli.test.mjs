@@ -374,6 +374,72 @@ test('studio cli: round limit is explicit and refuses a third discussion round',
   assert.equal(ctx.readSession('s5').status, 'awaiting_user')
 })
 
+test('studio cli: two rounds are the hard cap and a third round is never started', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  newSession(ctx, 's8')
+  for (let i = 0; i < 4; i++) assert.equal(ctx.run(['run', '--id', 's8']).status, 0)
+  const qs = JSON.parse(fs.readFileSync(path.join(ctx.dir('s8'), 'questions.json'), 'utf8'))
+  for (const q of qs) assert.equal(ctx.run(['answer', '--id', 's8', '--question', q.id, '--text', '按默认']).status, 0)
+  assert.equal(ctx.run(['run', '--id', 's8']).status, 0) // scribe
+  for (const id of ['D-1', 'D-2']) assert.equal(ctx.run(['answer', '--id', 's8', '--decision', id, '--text', '确认']).status, 0)
+  assert.equal(ctx.run(['run', '--id', 's8']).status, 0) // confirm_a
+
+  writeJson(ctx.fixtureCfg, { responses: { confirm_b: JSON.stringify({ verdict: 'reject', notes: '需要收窄' }) } })
+  const rejectRound = () => {
+    const r = ctx.run(['run', '--id', 's8'])
+    assert.equal(r.status, 0, r.stderr || r.stdout)
+    const all = JSON.parse(fs.readFileSync(path.join(ctx.dir('s8'), 'questions.json'), 'utf8'))
+    const last = all[all.length - 1]
+    assert.equal(last.kind, 'expert_reject')
+    // 用户处理后仍由三位专家重新独立确认，但轮次不能因此虚增
+    assert.equal(ctx.run(['answer', '--id', 's8', '--question', last.id, '--text', '收窄到 P6']).status, 0)
+  }
+  const decisionsOf = () => JSON.parse(fs.readFileSync(path.join(ctx.dir('s8'), 'decisions.json'), 'utf8'))
+
+  rejectRound() // 第 1 轮 → 第 1 轮业务轮次
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [1, 1])
+  assert.equal(ctx.readSession('s8').status, 'running')
+
+  assert.equal(ctx.run(['run', '--id', 's8']).status, 0) // confirm_a 重新确认
+  rejectRound() // 第 2 轮
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
+  const exhausted = ctx.readSession('s8')
+  assert.equal(exhausted.status, 'awaiting_user')
+  assert.equal(exhausted.blocking_reason, 'round_limit')
+
+  // 轮次耗尽后不再调用任何角色，也绝不写出第 3 轮
+  const callsBefore = ctx.callsList().length
+  const third = ctx.run(['run', '--id', 's8'])
+  assert.notEqual(third.status, 0)
+  assert.match(third.stderr, /rounds exhausted/)
+  assert.equal(ctx.callsList().length, callsBefore, '轮次耗尽后不能再调用专家')
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
+
+  const failedG0 = ctx.run(['conclude', '--id', 's8'])
+  assert.notEqual(failedG0.status, 0)
+  assert.match(failedG0.stdout, /G0 FAIL/)
+  assert.equal(ctx.readSession('s8').status, 'awaiting_user')
+})
+
+test('studio cli: scribe and moderator resolved to the same model id are refused', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+
+  const cfg = JSON.parse(fs.readFileSync(ctx.base, 'utf8'))
+  // 两个不同的配置键指向同一个实际模型：仍是同一个模型，不能分饰书记与主持。
+  cfg.models['mod-main'] = { provider: 'claude', id: 'shared-model', tier: 'top', availability: 'callable' }
+  cfg.models['adv-alias'] = { provider: 'claude', id: 'shared-model', tier: 'advanced', availability: 'callable' }
+  cfg.studio.roles.moderator = ['mod-main']
+  cfg.studio.roles.scribe = ['adv-alias']
+  fs.writeFileSync(ctx.base, JSON.stringify(cfg, null, 2), 'utf8')
+
+  const r = ctx.run(['new', '--id', 'same', '--title', 'x', '--input', '只读讨论'])
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /scribe model must differ/)
+  assert.equal(fs.existsSync(ctx.dir('same')), false)
+})
+
 test('studio cli: an expert reject blocks progress and must be re-confirmed independently', (t) => {
   const ctx = setup()
   t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))

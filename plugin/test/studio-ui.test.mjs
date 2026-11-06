@@ -906,6 +906,30 @@ test('studio host route: reads real sessions read-only and forwards writes as on
   assert.deepEqual(cliCalls()[1], ['studio', 'answer', '--repo', project, '--id', 'real', '--question', 'Q-1', '--text', '只做 P6', '--channel', 'ui'])
 })
 
+test('studio host route: a corrupt confirmation file is a read error, not ok', async (t) => {
+  const { home } = makeHome()
+  const project = makeProject('corrupt-confirmation', { sessions: [studioFixture('bad-conf')] })
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(project, { recursive: true, force: true }) })
+  fs.writeFileSync(path.join(project, '.collab', 'studio', 'bad-conf', 'confirmations', 'expert_a.json'), '{oops', 'utf8')
+
+  const host = await import(pathToFileURL(HOST).href + '?v=' + Date.now())
+  const { ctx, routes } = makeCtx()
+  host.apply(ctx, { agentlineHome: home, nodePath: process.execPath, defaultRepo: project, metricsEnabled: false })
+
+  const list = await callRoute(routes, '/agentline/studio', {
+    url: '/agentline/studio?project=' + encodeURIComponent(project),
+  })
+  assert.equal(list.body.ok, true)
+  assert.equal(list.body.sessions[0].state, 'corrupt', '列表必须显示损坏，而不是当作缺失')
+
+  const detail = await callRoute(routes, '/agentline/studio', {
+    url: '/agentline/studio?project=' + encodeURIComponent(project) + '&id=bad-conf',
+  })
+  assert.equal(detail.body.ok, false)
+  assert.equal(detail.body.state, 'corrupt')
+  assert.match(detail.body.error, /confirmations\/expert_a\.json/)
+})
+
 test('studio host route: corrupt associated evidence is an error, not empty or ok', async (t) => {
   const { home } = makeHome()
   const project = makeProject('corrupt-evidence', { sessions: [studioFixture('bad')] })

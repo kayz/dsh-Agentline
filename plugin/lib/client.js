@@ -907,10 +907,13 @@ window.__ModuleLoader__.load({
         const sid = studioSel
         const nextStep = session ? (STUDIO_STEPS.find((x) => (session.steps_done || []).indexOf(x) < 0) || 'done') : null
         const concluded = session && session.status === 'concluded'
+        // 轮次用满（2/2）后 run 会被核心拒绝：界面直接禁用并说明原因，不制造"还能再跑一轮"的错觉。
+        const roundsBlocked = !!(session && (session.blocking_reason === 'round_limit' || session.blocking_reason === 'rounds_invalid'))
         const runTitle = !detail ? '先选择一个会话'
           : concluded ? '会话已结束'
-            : openBlocking.length ? '需要先回答 ' + openBlocking.length + ' 个阻塞问题'
-              : '运行下一步（每次只执行一个角色调用）'
+            : roundsBlocked ? '业务轮次已用满 2/2，停止继续讨论'
+              : openBlocking.length ? '需要先回答 ' + openBlocking.length + ' 个阻塞问题'
+                : '运行下一步（每次只执行一个角色调用）'
         const detailNode = studioDetailError
           ? h('div', { className: 'agl-box', 'data-testid': 'studio-detail-error' },
             fine(studioDetailError),
@@ -926,7 +929,7 @@ window.__ModuleLoader__.load({
                 fine(session.title || sid),
                 h('div', { className: 'agl-route', style: { marginTop: '8px' } },
                   h('button', {
-                    className: 'agl-btn', 'data-testid': 'studio-run', disabled: busy || !session || concluded || openBlocking.length > 0,
+                    className: 'agl-btn', 'data-testid': 'studio-run', disabled: busy || !session || concluded || roundsBlocked || openBlocking.length > 0,
                     title: runTitle, onClick: () => studioAction('run', { id: sid }),
                   }, studioBusy ? '执行中…' : '运行下一步'),
                   h('button', {
@@ -981,7 +984,8 @@ window.__ModuleLoader__.load({
                   },
                     h('div', { className: 'agl-route' }, h('b', null, d.id + ' · ' + d.title), h('span', { className: 'agl-tag' }, show(d.status))),
                     fine(d.detail || '（无说明）'),
-                    fine('默认：' + show(d.default) + ' · 轮次 ' + (d.rounds_used || 0) + '/2'),
+                    // 轮次必须有明确记录：缺失或损坏时显示未知，不能用 0 假装没超限。
+                    fine('默认：' + show(d.default) + ' · 轮次 ' + (Number.isInteger(d.rounds_used) && d.rounds_used >= 0 ? d.rounds_used + '/2' : '未知')),
                     d.confirmed_by_user
                       ? fine('用户动作：' + (d.confirmed_by_user.kind === 'default' ? '采用默认' : '确认') + ' · ' + d.confirmed_by_user.text)
                       : h('div', { className: 'agl-ctl' },

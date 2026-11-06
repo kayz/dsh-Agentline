@@ -147,6 +147,58 @@ function tierOk(role, model) {
 }
 
 /**
+ * 模型身份：以实际 model id 为准，配置键只是别名。
+ * 两个不同键指向同一 provider/id 时仍是同一个模型，书记不能因此与主持重合。
+ */
+function modelRef(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+  const key = typeof entry.model === 'string' ? entry.model.trim() : ''
+  const name = id || key
+  if (!name) return null
+  const provider = typeof entry.provider === 'string' ? entry.provider.trim() : ''
+  return { name, provider, key }
+}
+
+/** 同一模型：配置键相同，或实际 id 相同；两边都写了 provider 时 id 相同还须 provider 一致。 */
+function sameModelRef(a, b) {
+  if (!a || !b) return false
+  if (a.key && b.key && a.key === b.key) return true
+  if (a.name !== b.name) return false
+  if (a.provider && b.provider && a.provider !== b.provider) return false
+  return true
+}
+
+function modelLabel(entry) {
+  const ref = modelRef(entry)
+  if (!ref) return 'unknown'
+  return ref.provider ? `${ref.provider}:${ref.name}` : ref.name
+}
+
+/**
+ * rounds_used 必须是明确的非负整数。
+ * 缺失、字符串、小数和负数都不能证明"轮次 ≤ 2"，所以返回 null 而不是按 0 处理。
+ */
+function roundCount(record) {
+  const v = record && typeof record === 'object' ? record.rounds_used : undefined
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) return null
+  return v
+}
+
+/** 轮次问题：`invalid` 表示无法证明，其余为超限的实际值；合格返回 null。 */
+function roundsProblem(record) {
+  const n = roundCount(record)
+  if (n === null) return 'invalid'
+  if (n > 2) return String(n)
+  return null
+}
+
+function roundsExhausted(record) {
+  const n = roundCount(record)
+  return n === null || n >= 2
+}
+
+/**
  * 只读：把配置解析成 UI/CLI 共用的角色矩阵条目。
  * 不抛错；缺配置时 primary = null，由调用方决定是否允许启动会话。
  */
@@ -205,8 +257,11 @@ function resolveRoles(config, projectCfg, overrides = {}) {
       provider: picked.model.provider,
     }
   }
-  if (resolved.scribe.model === resolved.moderator.model) {
-    throw new StudioError('E_SCRIBE_IS_MODERATOR', 'scribe model must differ from moderator model')
+  if (sameModelRef(modelRef(resolved.scribe), modelRef(resolved.moderator))) {
+    throw new StudioError(
+      'E_SCRIBE_IS_MODERATOR',
+      `scribe model must differ from moderator model (both are ${modelLabel(resolved.moderator)})`,
+    )
   }
   return resolved
 }
@@ -253,16 +308,27 @@ export function readStudio(repo, id) {
   const cdir = path.join(dir, 'confirmations')
   let names = []
   try { names = fs.readdirSync(cdir).filter((f) => f.endsWith('.json')) } catch { names = [] }
+  // 无法解析的确认文件是读取错误：它既不能当作"专家已确认"，也不能静默当成缺失。
+  let confirmationsInvalid = false
   for (const name of names) {
     const r = readJson(path.join(cdir, name))
-    if (!r.ok) { errors.push(`confirmations/${name} unreadable: ${r.error}`); continue }
+    if (!r.ok) {
+      confirmationsInvalid = true
+      errors.push(`confirmations/${name} unreadable: ${r.error}`)
+      continue
+    }
+    if (!r.value || typeof r.value !== 'object' || Array.isArray(r.value)) {
+      confirmationsInvalid = true
+      errors.push(`confirmations/${name} is not a confirmation record`)
+      continue
+    }
     // 以文件名为准，G0 再校验记录内的 expert 是否与之匹配，避免记录互相冒充。
     confirmations[name.replace(/\.json$/, '')] = r.value
   }
 
   return {
     // 关联证据损坏时整体按 corrupt 返回：UI 必须能把它与"没有会话"区分开。
-    state: questionsInvalid || decisionsInvalid ? 'corrupt' : 'ok',
+    state: questionsInvalid || decisionsInvalid || confirmationsInvalid ? 'corrupt' : 'ok',
     dir,
     session: raw.value,
     questions: Array.isArray(questions.value) ? questions.value : [],
@@ -270,6 +336,7 @@ export function readStudio(repo, id) {
     decisions: Array.isArray(decisions.value) ? decisions.value : [],
     decisionsInvalid,
     confirmations,
+    confirmationsInvalid,
     minutes: readText(path.join(dir, 'minutes-final.md')).value || '',
     errors,
   }
@@ -669,10 +736,14 @@ function normalizeDecisions(parsed, existing) {
 function statusAfterStep(session, questions, decisions, extra = {}) {
   const blocked = openBlocking(questions, false)
   if (blocked.length) return { status: 'awaiting_user', blocking_reason: `${blocked.length} 个阻塞问题待回答` }
-  if (extra.roundLimit) return { status: 'awaiting_user', blocking_reason: extra.roundLimit }
   if (extra.reject) return { status: 'awaiting_user', blocking_reason: 'expert_reject' }
-  if ((decisions || []).some((d) => Number(d.rounds_used || 0) > 2)) {
-    return { status: 'awaiting_user', blocking_reason: 'round_limit' }
+  // 2/2 已用满或轮次无法证明时停住，不自动选默认、也不进入第三轮。
+  const exhausted = (decisions || []).filter((d) => roundsExhausted(d))
+  if (exhausted.length) {
+    return {
+      status: 'awaiting_user',
+      blocking_reason: exhausted.some((d) => roundCount(d) === null) ? 'rounds_invalid' : 'round_limit',
+    }
   }
   if (currentStep(session) === 'done') {
     return allDecisionsConfirmed(decisions)
@@ -699,11 +770,16 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
       : ''
     throw new StudioError('E_AWAITING_USER', `awaiting_user: ${blocked.map((q) => q.id).join(', ')} must be answered before running${extra}`)
   }
-  // 轮次耗尽是硬停：不再进入第三轮讨论，也不替用户或专家做确认。
-  if (r.decisions.some((d) => Number(d.rounds_used || 0) > 2)) {
+  // 轮次耗尽（2/2）即硬停：不再调用任何角色，避免一次拒绝把轮次写成第 3 轮。
+  // rounds_used 缺失或不是整数时同样无法证明还有额度，一并拒绝。
+  const spent = r.decisions
+    .map((d) => ({ id: d.id, rounds: roundCount(d) }))
+    .filter((x) => x.rounds === null || x.rounds >= 2)
+  if (spent.length) {
     throw new StudioError(
       'E_ROUNDS_EXHAUSTED',
-      'decision rounds exhausted (>2): G0 cannot pass; stop instead of starting another discussion round',
+      `decision rounds exhausted (${spent.map((x) => `${x.id}:${x.rounds === null ? 'rounds_used invalid' : `${x.rounds}/2`}`).join(', ')}); ` +
+      'no further role call is made and G0 cannot pass — stop instead of starting another discussion round',
     )
   }
   const step = currentStep(session)
@@ -787,8 +863,9 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     writeJson(path.join(dir, 'confirmations', `${providerRole}.json`), record)
     if (verdict === 'reject') {
       reject = record
-      // 一次拒绝 = 一轮新的业务轮次：计入决策轮次，并允许该专家在处理后重新确认。
-      decisions = decisions.map((d) => ({ ...d, rounds_used: Number(d.rounds_used || 0) + 1 }))
+      // 一次拒绝 = 一轮新的业务轮次。2 轮的硬上限已在上方 `E_ROUNDS_EXHAUSTED` 拦住，
+      // 所以这里最多把轮次从 1 记到 2，不会写出第 3 轮。
+      decisions = decisions.map((d) => ({ ...d, rounds_used: roundCount(d) + 1 }))
       writeJson(path.join(dir, 'decisions.json'), decisions)
       questions = [...r.questions, {
         id: nextQuestionId(r.questions),
@@ -809,7 +886,7 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
         if (role === providerRole) continue
         try { fs.rmSync(path.join(dir, 'confirmations', `${role}.json`), { force: true }) } catch { /* ignore */ }
       }
-      const round = Math.max(1, ...decisions.map((d) => Number(d.rounds_used || 0)))
+      const round = Math.max(1, ...decisions.map((d) => roundCount(d) ?? 0))
       appendMinutesRevision(dir, [
         `## 修订记录（第 ${round} 轮）`,
         `- 专家 ${providerRole} 拒绝：${record.notes || '未说明原因'}`,
@@ -819,15 +896,9 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
   }
 
   let doneSteps = [...(session.steps_done || []), step]
-  let roundLimit = null
   if (reject) {
-    // 轮次耗尽就停下：不自动选默认、也不进入第三轮讨论。
-    if (decisions.some((d) => Number(d.rounds_used || 0) > 2)) {
-      roundLimit = 'round_limit'
-    } else {
-      // 撤掉全部确认步骤：修订后的纪要和决策要三位专家重新各自确认。
-      doneSteps = doneSteps.filter((s) => !CONFIRM_TARGET[s])
-    }
+    // 撤掉全部确认步骤：修订后的纪要和决策要三位专家重新各自确认。
+    doneSteps = doneSteps.filter((s) => !CONFIRM_TARGET[s])
   }
   const outputs = { ...(session.outputs || {}) }
   if (!CONFIRM_TARGET[step] && step !== 'scribe') outputs[step] = output
@@ -838,7 +909,7 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     last_error: null,
     calls: [...(session.calls || []), { step, role: providerRole, model: result.model, at: nowIso(), ok: true, error: null }],
   }
-  const after = statusAfterStep(nextSession, questions, decisions, { reject, roundLimit })
+  const after = statusAfterStep(nextSession, questions, decisions, { reject })
   const saved = saveSession(dir, { ...nextSession, ...after })
   return { ok: true, step, session: saved, questions, decisions }
 }
@@ -871,7 +942,13 @@ export function answerStudio(repo, id, { question, decision, text, adoptDefault 
     if (q.status !== 'open' && questionClosed(q)) throw new StudioError('E_QUESTION_CLOSED', `question ${question} is ${q.status}`)
     if (adoptDefault && !q.default) throw new StudioError('E_NO_DEFAULT', `question ${question} has no default`)
     const link = q.decision ? decisions.find((d) => d.id === q.decision) : null
-    const rounds = Math.max(Number(q.rounds_used || 0), link ? Number(link.rounds_used || 0) : 0)
+    const qRounds = roundCount(q)
+    const linkRounds = link ? roundCount(link) : 0
+    // 轮次缺失或无效时无法证明还剩额度：只允许显式采用默认收尾，不再开一轮讨论。
+    if (!adoptDefault && (qRounds === null || linkRounds === null)) {
+      throw new StudioError('E_ROUNDS_INVALID', `question ${question} has invalid rounds_used; only --default can resolve it`)
+    }
+    const rounds = Math.max(qRounds ?? 0, linkRounds ?? 0)
     if (!adoptDefault && rounds >= 2) {
       throw new StudioError('E_ROUND_LIMIT', `question ${question} already used ${rounds}/2 rounds; answer with --default or resolve it without another discussion round`)
     }
@@ -880,11 +957,11 @@ export function answerStudio(repo, id, { question, decision, text, adoptDefault 
       ...q,
       status: adoptDefault ? 'default_adopted' : 'answered',
       user_action: action,
-      rounds_used: adoptDefault ? Number(q.rounds_used || 0) : Number(q.rounds_used || 0) + 1,
+      rounds_used: adoptDefault ? q.rounds_used : qRounds + 1,
     }
     questions = questions.map((x, i) => (i === idx ? nextQ : x))
     if (link && !adoptDefault) {
-      decisions = decisions.map((d) => (d.id === link.id ? { ...d, rounds_used: Number(d.rounds_used || 0) + 1 } : d))
+      decisions = decisions.map((d) => (d.id === link.id ? { ...d, rounds_used: linkRounds + 1 } : d))
       writeJson(path.join(dir, 'decisions.json'), decisions)
     }
     writeJson(path.join(dir, 'questions.json'), questions)
@@ -949,10 +1026,11 @@ export function evaluateG0(repo, id, { now } = {}) {
   const decisionsInvalid = !!r.decisionsInvalid
 
   const open = openBlocking(r.questions, r.questionsInvalid)
+  // 轮次必须写明且是 0..2 的整数：缺失/损坏不能按 0 处理，否则无法证明"没超两轮"。
   const roundsOver = [
-    ...(r.questions || []).filter((q) => Number(q.rounds_used || 0) > 2).map((q) => q.id),
-    ...decisions.filter((d) => Number(d.rounds_used || 0) > 2).map((d) => d.id),
-  ]
+    ...(r.questions || []).map((q) => ({ id: q.id || 'question', problem: roundsProblem(q) })),
+    ...decisions.map((d) => ({ id: d.id || 'decision', problem: roundsProblem(d) })),
+  ].filter((x) => x.problem)
   // 独立有效确认：必须来自该角色自己的模型，且带结论与时间；别人代写的确认不算。
   // 记录里的 expert 必须等于角色本身（缺失也不行），model 必须等于该角色被分配的模型
   // （角色没有分配模型时同样无法证明独立确认）。
@@ -968,8 +1046,11 @@ export function evaluateG0(repo, id, { now } = {}) {
     return false
   })
   const rejected = EXPERTS.filter((role) => confirmations[role] && confirmations[role].verdict === 'reject')
-  const scribeModel = session.roles?.scribe?.model || null
-  const moderatorModel = session.roles?.moderator?.model || null
+  // 比较实际模型身份（provider + id），配置键只是别名：两个键指向同一模型仍然算同一个。
+  const scribeRole = session.roles?.scribe
+  const moderatorRole = session.roles?.moderator
+  const scribeRef = modelRef(scribeRole)
+  const moderatorRef = modelRef(moderatorRole)
 
   const checks = [
     {
@@ -1005,9 +1086,11 @@ export function evaluateG0(repo, id, { now } = {}) {
     {
       id: 'G0.decision_rounds_le_2',
       desc: '每个决策与问题的业务轮次 ≤ 2',
-      pass: roundsOver.length === 0,
+      pass: !r.questionsInvalid && !decisionsInvalid && roundsOver.length === 0,
       waivable: false,
-      evidence: roundsOver.join(',') || 'all <= 2',
+      evidence: decisionsInvalid ? 'decisions.json invalid'
+        : r.questionsInvalid ? 'questions.json invalid'
+          : (roundsOver.map((x) => `${x.id}:${x.problem}`).join(',') || 'all <= 2'),
     },
     {
       id: 'G0.experts_confirmed',
@@ -1019,9 +1102,9 @@ export function evaluateG0(repo, id, { now } = {}) {
     {
       id: 'G0.scribe_ne_moderator',
       desc: '书记与主持模型均已知且不同',
-      pass: !!scribeModel && !!moderatorModel && scribeModel !== moderatorModel,
+      pass: !!scribeRef && !!moderatorRef && !sameModelRef(scribeRef, moderatorRef),
       waivable: false,
-      evidence: `scribe=${scribeModel || 'unknown'} moderator=${moderatorModel || 'unknown'}`,
+      evidence: `scribe=${modelLabel(scribeRole)} moderator=${modelLabel(moderatorRole)}`,
     },
   ]
 
