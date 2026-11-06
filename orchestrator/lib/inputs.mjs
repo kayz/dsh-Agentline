@@ -11,6 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { withInputLock } from './contracts/input-lock.mjs'
 
 const KINDS = new Set(['note', 'amendment', 'answer'])
 
@@ -20,18 +21,20 @@ export function attentionPath(taskDir) { return path.join(taskDir, 'attention.js
 export function appendInput(taskDir, { kind, text, by = 'user', meta = null }) {
   if (!KINDS.has(kind)) throw new Error(`unknown input kind: ${kind} (allowed: note, amendment, answer)`)
   if (!text || !String(text).trim()) throw new Error('input text is required')
-  fs.mkdirSync(taskDir, { recursive: true })
-  const entry = {
-    id: 'in-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'),
-    at: new Date().toISOString(),
-    kind,
-    by,
-    text: String(text).trim(),
-    status: 'pending',
-    ...(meta ? { meta } : {}),
-  }
-  fs.appendFileSync(inputsPath(taskDir), JSON.stringify(entry) + '\n', 'utf8')
-  return entry
+  return withInputLock(taskDir, () => {
+    fs.mkdirSync(taskDir, { recursive: true })
+    const entry = {
+      id: 'in-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'),
+      at: new Date().toISOString(),
+      kind,
+      by,
+      text: String(text).trim(),
+      status: 'pending',
+      ...(meta ? { meta } : {}),
+    }
+    fs.appendFileSync(inputsPath(taskDir), JSON.stringify(entry) + '\n', 'utf8')
+    return entry
+  })
 }
 
 export function readInputs(taskDir) {
@@ -52,16 +55,18 @@ export function pendingInputs(taskDir, kinds = null) {
 
 export function markConsumed(taskDir, ids) {
   if (!ids || !ids.length) return
-  const set = new Set(ids)
-  const all = readInputs(taskDir)
-  let changed = false
-  for (const i of all) {
-    if (i.status === 'pending' && set.has(i.id)) { i.status = 'consumed'; changed = true }
-  }
-  if (!changed) return
-  const tmp = inputsPath(taskDir) + '.tmp'
-  fs.writeFileSync(tmp, all.map((i) => JSON.stringify(i)).join('\n') + '\n', 'utf8')
-  fs.renameSync(tmp, inputsPath(taskDir))
+  withInputLock(taskDir, () => {
+    const set = new Set(ids)
+    const all = readInputs(taskDir)
+    let changed = false
+    for (const i of all) {
+      if (i.status === 'pending' && set.has(i.id)) { i.status = 'consumed'; changed = true }
+    }
+    if (!changed) return
+    const tmp = inputsPath(taskDir) + '.tmp'
+    fs.writeFileSync(tmp, all.map((i) => JSON.stringify(i)).join('\n') + '\n', 'utf8')
+    fs.renameSync(tmp, inputsPath(taskDir))
+  })
 }
 
 export function readAttention(taskDir) {
