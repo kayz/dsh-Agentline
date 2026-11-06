@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentLine 驾驶舱 · 静态模拟</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --blue:#58a6ff; --green:#3fb950;
+    --yellow:#d29922; --red:#f85149; --purple:#a371f7; --orange:#db6d28;
+    --radius:10px; --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  button,select,input{font:inherit;color:inherit}
+  button{cursor:pointer}
+  .app{max-width:1440px;margin:0 auto;min-height:100vh;background:var(--bg)}
+  .topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);background:#0b0f14;position:sticky;top:0;z-index:20;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.2px;white-space:nowrap}
+  .brand b{color:var(--blue)}
+  .project{border:1px solid var(--border);background:var(--panel);border-radius:8px;padding:5px 8px;color:var(--text)}
+  .stages{display:flex;align-items:center;gap:2px;margin-left:8px;flex-wrap:wrap}
+  .stage{border:1px solid transparent;background:transparent;border-radius:8px;padding:5px 9px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .stage:hover{background:var(--panel);color:var(--text)}
+  .stage.active{background:rgba(88,166,255,.12);border-color:rgba(88,166,255,.35);color:var(--text)}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--muted)}
+  .dot.ok{background:var(--green)} .dot.run{background:var(--blue)} .dot.wait{background:var(--yellow)} .dot.bad{background:var(--red)} .dot.stale{background:var(--orange)}
+  .top-actions{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
+  .chip{border:1px solid var(--border);background:var(--panel);border-radius:999px;padding:4px 9px;color:var(--muted);white-space:nowrap}
+  .chip b{color:var(--text)}
+  .chip.warn{border-color:rgba(210,153,34,.45);color:var(--yellow)}
+  .chip.ok{border-color:rgba(63,185,80,.4);color:var(--green)}
+  .icon-btn{border:1px solid var(--border);background:var(--panel);border-radius:8px;padding:5px 8px;color:var(--muted)}
+  .icon-btn:hover{color:var(--text);border-color:#484f58}
+  .tabs{display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--border);background:#0b0f14;position:sticky;top:53px;z-index:19;overflow:auto}
+  .tab{border:0;background:transparent;color:var(--muted);padding:10px 12px;border-bottom:2px solid transparent;white-space:nowrap}
+  .tab.active{color:var(--text);border-bottom-color:var(--blue)}
+  .global-banner{display:flex;gap:10px;align-items:center;padding:8px 16px;background:rgba(248,81,73,.1);border-bottom:1px solid rgba(248,81,73,.35);color:#ffb4ad}
+  .global-banner .grow{flex:1}
+  main{padding:16px;max-width:1440px}
+  .page{display:none} .page.active{display:block}
+  .muted{color:var(--muted)} .small{font-size:12px}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .between{justify-content:space-between}
+  .grid{display:grid;gap:12px}
+  .cols-2{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}
+  .cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media(max-width:1000px){.cols-2,.cols-3{grid-template-columns:1fr}.topbar{position:static}.tabs{position:static}}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .panel h3{margin:0 0 10px;font-size:14px}
+  .panel h4{margin:0 0 8px;font-size:13px}
+  .subhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .title{font-size:18px;font-weight:700;margin:0}
+  .subtitle{color:var(--muted);font-size:12px;margin-top:3px}
+  .status{border:1px solid var(--border);border-radius:999px;padding:3px 9px;font-size:12px;color:var(--muted)}
+  .status.wait{color:var(--yellow);border-color:rgba(210,153,34,.45);background:rgba(210,153,34,.08)}
+  .status.ok{color:var(--green);border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.08)}
+  .status.bad{color:var(--red);border-color:rgba(248,81,73,.4);background:rgba(248,81,73,.08)}
+  .btn{border:1px solid var(--border);background:var(--panel2);border-radius:8px;padding:6px 10px;color:var(--text)}
+  .btn:hover{border-color:#484f58}
+  .btn.primary{border-color:rgba(88,166,255,.5);background:rgba(88,166,255,.14);color:#cfe8ff}
+  .btn.good{border-color:rgba(63,185,80,.5);background:rgba(63,185,80,.12);color:#b7f7c3}
+  .btn.warn{border-color:rgba(210,153,34,.5);background:rgba(210,153,34,.1);color:#ffe1a3}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .tag{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-size:11px;color:var(--muted);white-space:nowrap}
+  .tag.green{color:var(--green);border-color:rgba(63,185,80,.35)} .tag.yellow{color:var(--yellow);border-color:rgba(210,153,34,.35)}
+  .tag.red{color:var(--red);border-color:rgba(248,81,73,.35)} .tag.blue{color:var(--blue);border-color:rgba(88,166,255,.35)}
+  .mono{font-family:var(--mono);font-size:11.5px}
+  .kicker{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .inbox-item{border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:10px;padding:12px 14px;background:var(--panel);margin-bottom:10px}
+  .inbox-item.bad{border-left-color:var(--red)}
+  .inbox-item.ok{border-left-color:var(--green)}
+  .inbox-item .head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .inbox-item .msg{color:var(--text);margin:4px 0 9px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .list{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .list-row{display:grid;grid-template-columns:minmax(200px,1fr) 160px 140px 120px;gap:10px;padding:9px 12px;border-top:1px solid var(--border);align-items:center}
+  .list-row:first-child{border-top:0;background:var(--panel2);color:var(--muted);font-size:11px}
+  .list-row .grow{min-width:0}
+  .truncate{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .timeline{display:flex;flex-direction:column;gap:0;margin-top:8px}
+  .tl-item{display:grid;grid-template-columns:58px 18px 1fr;gap:8px;padding:7px 0;align-items:start}
+  .tl-mark{width:10px;height:10px;border-radius:50%;margin-top:4px;background:var(--border)}
+  .tl-item.ok .tl-mark{background:var(--green)} .tl-item.run .tl-mark{background:var(--blue)} .tl-item.bad .tl-mark{background:var(--red)} .tl-item.wait .tl-mark{background:var(--yellow)}
+  .tl-line{position:relative}
+  .tl-line:before{content:"";position:absolute;left:4px;top:16px;bottom:-7px;width:1px;background:var(--border)}
+  .tl-item:last-child .tl-line:before{display:none}
+  .table{width:100%;border-collapse:collapse;font-size:12px}
+  .table th,.table td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+  .table th{color:var(--muted);font-weight:600;font-size:11px;background:var(--panel2)}
+  .table tr:last-child td{border-bottom:0}
+  .kv{display:grid;grid-template-columns:110px 1fr;gap:7px 10px;font-size:12px}
+  .kv .k{color:var(--muted)}
+  .artifact{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:7px;padding:4px 8px;background:var(--panel2);color:var(--text);font-size:12px}
+  .artifact:hover{border-color:#484f58}
+  .subnav{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:12px 0;overflow:auto}
+  .subnav button{border:0;background:transparent;color:var(--muted);padding:8px 10px;border-bottom:2px solid transparent;white-space:nowrap}
+  .subnav button.active{color:var(--text);border-bottom-color:var(--blue)}
+  .tabpane{display:none}.tabpane.active{display:block}
+  .callout{border:1px solid var(--border);border-left:3px solid var(--blue);background:rgba(88,166,255,.06);border-radius:8px;padding:9px 11px;color:var(--muted);margin:8px 0}
+  .callout.warn{border-left-color:var(--yellow);background:rgba(210,153,34,.06)}
+  .bar{height:6px;border-radius:999px;background:var(--border);overflow:hidden}
+  .bar>span{display:block;height:100%;background:var(--blue);width:42%}
+  .quick{display:flex;gap:8px;align-items:center;border:1px solid var(--border);background:var(--panel);border-radius:9px;padding:6px 9px;color:var(--muted)}
+  .quick input{border:0;outline:0;background:transparent;color:var(--text);width:100%;font-family:var(--mono);font-size:12px}
+  .avatar{width:24px;height:24px;border-radius:50%;background:#21262d;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:11px;color:var(--blue)}
+  .model{display:inline-flex;align-items:center;gap:5px}
+  .footer{margin:18px 0 4px;color:var(--muted);font-size:11px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .mock-note{background:rgba(163,113,247,.1);border:1px solid rgba(163,113,247,.35);color:#d8c7ff;border-radius:8px;padding:6px 10px;font-size:12px}
+  dialog{border:1px solid var(--border);border-radius:12px;background:var(--panel);color:var(--text);padding:0;max-width:520px;width:calc(100% - 32px)}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  .dlg-h{padding:13px 16px;border-bottom:1px solid var(--border);font-weight:700}
+  .dlg-b{padding:14px 16px;color:var(--muted)} .dlg-b b{color:var(--text)}
+  .dlg-f{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+  .hash{font-family:var(--mono);font-size:11px;color:var(--blue);background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.2);padding:2px 5px;border-radius:4px}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">◈ Agent<b>Line</b></div>
+    <select class="project" aria-label="项目">
+      <option>dsh-Agentline</option>
+      <option>Shimeji</option>
+    </select>
+    <div class="stages" role="tablist" aria-label="阶段">
+      <button class="stage" data-page="studio"><span class="dot ok"></span>Studio <span class="small">●</span></button>
+      <button class="stage active" data-page="blueprint"><span class="dot run"></span>Blueprint <span class="small">2/3</span></button>
+      <button class="stage" data-page="build"><span class="dot wait"></span>Build <span class="small">4/9</span></button>
+    </div>
+    <div class="top-actions">
+      <button class="chip warn" data-page="home">⚠ 待处理 <b>3</b></button>
+      <button class="chip">▶ 运行 <b>2</b></button>
+      <button class="chip">额度 <b>Claude 5h 62%</b> ▾</button>
+      <button class="icon-btn" title="刷新">↻</button>
+      <button class="icon-btn" title="设置" data-page="settings">⚙</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-page="home">首页</button>
+    <button class="tab" data-page="studio">Studio</button>
+    <button class="tab" data-page="blueprint">Blueprint</button>
+    <button class="tab" data-page="build">Build</button>
+    <button class="tab" data-page="settings">设置</button>
+    <span style="margin-left:auto;display:flex;align-items:center;padding:0 4px" class="small muted">静态模拟 · 仅用于 UI/UX 评审</span>
+  </nav>
+
+  <div class="global-banner">
+    <span>⛔</span>
+    <span><b>codex 需要登录</b>：Blueprint 评审角色无法调用 gpt-6.1-sol。</span>
+    <span class="grow"></span>
+    <button class="btn" data-page="settings">查看 Provider</button>
+    <button class="btn primary">我已登录，继续</button>
+  </div>
+
+  <main>
+    <!-- HOME -->
+    <section class="page active" id="page-home" aria-labelledby="home-title">
+      <div class="subhead">
+        <div>
+          <h1 class="title" id="home-title">现在卡在哪</h1>
+          <div class="subtitle">AgentLine 插件与三阶段控制面 · Blueprint 第 2/3 轮 · 评审中 · gpt-6.1-sol（身份未验证）· 6 分钟</div>
+        </div>
+        <div class="row">
+          <span class="mock-note">静态模拟 · 数据仅用于评审</span>
+          <button class="btn" data-page="blueprint">打开当前阶段</button>
+        </div>
+      </div>
+
+      <div class="cols-2">
+        <div>
+          <div class="row between" style="margin-bottom:8px"><h3 style="margin:0">待我处理 <span class="muted">(3)</span></h3><button class="btn">全部收起</button></div>
+          <div class="inbox-item bad">
+            <div class="head"><span class="tag red">阻塞</span><b>需要登录 · codex</b><span class="muted small">Blueprint · 评审角色</span></div>
+            <div class="msg">gpt-6.1-sol 无法调用：CLI 报告未登录。登录后继续，<b>不计入业务轮次</b>。</div>
+            <div class="actions">
+              <button class="btn primary">我已登录，继续</button>
+              <button class="btn">复制命令：codex login</button>
+              <button class="btn">证据：错误日志 · probe 记录</button>
+            </div>
+          </div>
+          <div class="inbox-item">
+            <div class="head"><span class="tag yellow">问题</span><b>Q-03 · Studio · 第 1/2 轮</b><span class="muted small">阻塞项</span></div>
+            <div class="msg">轮次耗尽后怎么处理？</div>
+            <label class="small muted" style="display:block;margin:4px 0 7px"><input type="radio" name="q3" checked /> A 原会话硬停，按裁决新建关联会话（默认） &nbsp; <input type="radio" name="q3" /> B 允许追加一轮，最多 4 轮</label>
+            <div class="actions"><button class="btn">补充说明…</button><button class="btn primary">提交回答</button><button class="btn">采用默认</button></div>
+            <div class="small muted" style="margin-top:8px">证据：minutes-final §5 · 专家 B 意见</div>
+          </div>
+          <div class="inbox-item ok">
+            <div class="head"><span class="tag green">可批准</span><b>G1 · Blueprint</b><span class="muted small">12/12 通过（1 豁免）</span></div>
+            <div class="msg">批准绑定内容 <span class="hash">sha256:9f2c1a7b3d4e…</span>；之后任何文件改动都会让批准失效。</div>
+            <div class="actions"><button class="btn primary" onclick="openApprove()">查看并批准</button><button class="btn" data-page="blueprint">先看任务图</button></div>
+          </div>
+
+          <div class="panel" style="margin-top:14px">
+            <div class="row between"><h3>运行中 <span class="muted">(2)</span></h3><span class="small muted">自动刷新 · 5s</span></div>
+            <div class="list">
+              <div class="list-row"><div><b>Build 004</b> <span class="muted">dev r1</span></div><div class="mono">gpt-6.1-sol</div><div><span class="tag blue">running</span></div><div class="small muted">12m</div></div>
+              <div class="list-row"><div><b>Blueprint r2</b> <span class="muted">review</span></div><div class="mono">gpt-6.1-sol</div><div><span class="tag yellow">unverified</span></div><div class="small muted">6m</div></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="grid" style="align-content:start">
+          <div class="panel">
+            <h3>流水线</h3>
+            <div class="kv">
+              <div class="k">Studio</div><div><span class="tag green">通过</span> <span class="mono small">G0 · 41ab…</span></div>
+              <div class="k">Blueprint</div><div><span class="tag blue">第 2/3 轮</span> <span class="mono small">评审中</span></div>
+              <div class="k">Build</div><div><span class="tag yellow">4/9 merged</span> <span class="small muted">E2E 未运行</span></div>
+            </div>
+            <div style="margin-top:12px"><div class="bar"><span></span></div><div class="small muted" style="margin-top:5px">Blueprint 预算 19% · 已用 6 分钟 / 30 分钟</div></div>
+          </div>
+          <div class="panel">
+            <h3>最近事件</h3>
+            <div class="small muted">10:41 &nbsp; Blueprint r2 testability 完成：0 blocker</div>
+            <div class="small muted">10:39 &nbsp; 评审角色 probe 失败：auth</div>
+            <div class="small muted">10:31 &nbsp; G1 预览：12 项检查，1 项豁免</div>
+            <div style="margin-top:10px"><button class="btn">展开全部</button></div>
+          </div>
+          <div class="quick"><span>⌘K</span><input aria-label="命令" placeholder="/agentline status  ·  /agentline blueprint approve" /></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- STUDIO -->
+    <section class="page" id="page-studio" aria-labelledby="studio-title">
+      <div class="subhead">
+        <div>
+          <h1 class="title" id="studio-title">「AgentLine 插件三阶段改造」</h1>
+          <div class="subtitle"><span class="mono">20261106-agentline-plugin</span> · G0 <span class="tag yellow">未评估</span> · 等待用户处理</div>
+        </div>
+        <div class="actions"><button class="btn">角色详情</button><button class="btn" onclick="openApprove()">结束并评估 G0</button></div>
+      </div>
+      <div class="cols-2">
+        <div class="grid">
+          <div class="panel">
+            <div class="row between"><h3>角色与预算</h3><span class="small muted">角色锁定 rev 4</span></div>
+            <div class="row" style="gap:18px">
+              <span><span class="avatar">A</span> 专家A <span class="mono">claude-opus-5-5</span> <span class="tag green">✓</span></span>
+              <span><span class="avatar">B</span> 专家B <span class="mono">gpt-6.1-sol</span> <span class="tag yellow">⚠ 未验证</span></span>
+              <span><span class="avatar">C</span> 专家C <span class="mono">gemini-4-argon</span> <span class="tag green">✓</span></span>
+              <span><span class="avatar">M</span> 主持 <span class="mono">kimi-k3.1-pro</span> <span class="tag green">✓</span></span>
+              <span><span class="avatar">S</span> 书记 <span class="mono">claude-sonnet-5-5</span> <span class="tag yellow">advanced</span></span>
+            </div>
+            <div class="small muted" style="margin-top:10px">调用 7/30 · token 0.9M/4M · 估算 $9.8/$40</div>
+          </div>
+
+          <div class="panel">
+            <h3>轮次时间线</h3>
+            <div class="timeline">
+              <div class="tl-item ok"><div class="mono small">R1</div><div class="tl-line"><div class="tl-mark"></div></div><div>专家A ✓ · 专家B ✓ · 专家C ⚠截断 → 主持 ✓ → 问题 6 → 书记 ✓ → 确认 2/3 <button class="btn small">展开</button></div></div>
+              <div class="tl-item wait"><div class="mono small">R2</div><div class="tl-line"><div class="tl-mark"></div></div><div>等待你回答 Q-03、Q-05 <span class="tag yellow">awaiting_user</span></div></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="row between"><h3>问题</h3><div class="small muted">全部 6 · 待回答 2 · 阻塞 1</div></div>
+            <table class="table">
+              <thead><tr><th>ID</th><th>标题</th><th>阻塞</th><th>轮次</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">Q-01</td><td>控制面边界</td><td><span class="tag red">是</span></td><td>1/2</td><td><span class="tag blue">已回答 A</span></td><td><button class="btn small">查看</button></td></tr>
+                <tr><td class="mono">Q-03</td><td>轮次上限</td><td><span class="tag red">是</span></td><td>1/2</td><td><span class="tag yellow">待回答</span></td><td><button class="btn small primary">回答</button></td></tr>
+                <tr><td class="mono">Q-05</td><td>Git 留存</td><td><span class="tag red">是</span></td><td>2/2</td><td><span class="tag yellow">待回答 ⚠末轮</span></td><td><button class="btn small primary">回答</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="panel">
+            <h3>FACT · 纪要 · 决策</h3>
+            <div class="actions">
+              <button class="artifact">📄 facts.md</button>
+              <button class="artifact">📄 minutes-final.md</button>
+              <button class="artifact">📄 moderator-brief.md</button>
+              <button class="artifact">📄 decisions.md</button>
+            </div>
+            <div class="small muted" style="margin-top:10px">确认：专家A accept_with_notes · 专家B accept · 专家C 未确认 &nbsp; <button class="btn small">展开备注</button></div>
+            <div class="callout warn" style="margin-top:10px">异议 1 条未解决：专家C — rate_limit 自动等待上限。 &nbsp; <button class="btn small">展开</button></div>
+          </div>
+        </div>
+
+        <aside class="grid" style="align-content:start">
+          <div class="panel">
+            <h3>下一步</h3>
+            <div class="small muted">当前卡在 2 个阻塞问题。回答后，主持会生成新的 FACT，书记更新纪要。</div>
+            <div class="actions" style="margin-top:10px"><button class="btn primary" disabled>运行下一步</button><button class="btn">结束并评估 G0</button></div>
+            <div class="small muted" style="margin-top:8px">禁用原因：需要先回答 2 个阻塞问题。</div>
+          </div>
+          <div class="panel">
+            <h3>快捷命令</h3>
+            <div class="mono small" style="line-height:1.9">/agentline studio status<br />/agentline studio answer Q-03 A<br />/agentline studio conclude</div>
+            <button class="btn" style="margin-top:8px">打开命令面板</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- BLUEPRINT -->
+    <section class="page" id="page-blueprint" aria-labelledby="bp-title">
+      <div class="subhead">
+        <div>
+          <h1 class="title" id="bp-title">「AgentLine 插件与三阶段控制面」</h1>
+          <div class="subtitle">来自 Studio 20261106 <span class="tag green">G0 ✓</span> <span class="mono small">sha256:41ab…</span> · <span class="tag blue">第 2/3 轮 · 评审中</span></div>
+        </div>
+        <div class="actions"><button class="btn">查看 G1</button><button class="btn">下一轮</button></div>
+      </div>
+
+      <div class="cols-2">
+        <div class="panel">
+          <div class="row between"><h3>轮次</h3><span class="small muted">每轮 design → testability → review</span></div>
+          <div class="timeline">
+            <div class="tl-item ok"><div class="mono small">v1</div><div class="tl-line"><div class="tl-mark"></div></div><div>设计 ✓ → 测试 ✓（2 blocker）→ 评审 ✗ revise（4 blocking）</div></div>
+            <div class="tl-item run"><div class="mono small">v2</div><div class="tl-line"><div class="tl-mark"></div></div><div>设计 ✓ → 测试 ✓（0 blocker）→ 评审 ◐ 6m <span class="tag blue">running</span></div></div>
+            <div class="tl-item"><div class="mono small">v3</div><div class="tl-line"><div class="tl-mark"></div></div><div class="muted">—</div></div>
+          </div>
+          <div class="small muted" style="margin-top:10px">角色：设计 claude-opus-5-5 ✓ · 评审 gpt-6.1-sol ⚠未验证 · 测试架构 gemini-4-argon ✓</div>
+        </div>
+
+        <aside class="grid" style="align-content:start">
+          <div class="panel">
+            <h3>G1 预览</h3>
+            <div class="row between"><span class="tag yellow">未评估</span><span class="small muted">12 checks</span></div>
+            <div class="bar" style="margin-top:10px"><span style="width:92%;background:var(--yellow)"></span></div>
+            <div class="small muted" style="margin-top:7px">2 个 blocking findings · 0 个测试 blocker</div>
+            <button class="btn" style="margin-top:9px">查看 Gate</button>
+          </div>
+          <div class="panel">
+            <h3>预算</h3>
+            <div class="kv"><div class="k">本轮</div><div>19% · 6/30 分钟</div><div class="k">模型</div><div>3 角色 · 1 未验证</div></div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="panel" style="margin-top:12px">
+        <div class="subnav" role="tablist">
+          <button class="active" data-pane="bp-overview">概览</button>
+          <button data-pane="bp-design">设计</button>
+          <button data-pane="bp-review">评审</button>
+          <button data-pane="bp-test">测试架构</button>
+          <button data-pane="bp-graph">任务图</button>
+          <button data-pane="bp-matrix">验收矩阵</button>
+          <button data-pane="bp-gate">Gate</button>
+        </div>
+
+        <div class="tabpane active" id="bp-overview">
+          <div class="cols-3">
+            <div class="callout">本轮目标：完成 AgentLine 插件三阶段控制面设计，覆盖 UI/UX、slash、监控、模型配置。</div>
+            <div class="callout warn">上一轮未关闭：4 个 blocking findings、2 个测试 blocker。</div>
+            <div class="callout">最近事件：10:41 testability 完成；10:39 review 开始。</div>
+          </div>
+        </div>
+
+        <div class="tabpane" id="bp-design">
+          <div class="row between"><h4>design-v2-delta.md</h4><div class="actions"><button class="btn small">v1</button><button class="btn small primary">v2</button><button class="btn small">与上一版对比</button></div></div>
+          <div class="callout">版本全文来自 B 级记录，标注“过程记录 · 不进 git · 哈希 ✓”。默认收起 diff。</div>
+          <pre class="mono small" style="white-space:pre-wrap;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">## 2.1 K1 可行性
+新增 runStep 入口；Supervisor 驱动循环；恢复按 ledger 事务...
+## 2.2 证据绑定
+G2 固定历史集成快照 I；manual-checks 进入内容哈希...
+## 3.4 T 三分
+T_content / T_pre / T_final...</pre>
+        </div>
+
+        <div class="tabpane" id="bp-review">
+          <div class="row between"><h4>Findings</h4><span class="small muted">默认只显示 open 和 blocking</span></div>
+          <table class="table">
+            <thead><tr><th>ID</th><th>严重度</th><th>领域</th><th>内容</th><th>设计师回应</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">F-07</td><td><span class="tag red">blocking</span></td><td>接口</td><td>K1 恢复契约未闭合</td><td>v3 补事务窗口</td><td><span class="tag yellow">open</span></td></tr>
+              <tr><td class="mono">F-11</td><td><span class="tag red">blocking</span></td><td>合并</td><td>T.reachable 与 K 写入顺序冲突</td><td>拆 T_pre/T_final</td><td><span class="tag yellow">open</span></td></tr>
+              <tr><td class="mono">F-14</td><td><span class="tag yellow">major</span></td><td>缓存</td><td>T_content 未覆盖本机日志检查</td><td>需补缓存键</td><td><span class="tag yellow">open</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="tabpane" id="bp-test">
+          <div class="cols-2">
+            <div class="panel"><h4>测试分层</h4><div class="kv"><div class="k">unit</div><div>契约/解析/错误分类</div><div class="k">contract</div><div>CLI/API/JSON schema</div><div class="k">integration</div><div>supervisor/flow/gate</div><div class="k">e2e</div><div>Tauri/WebView/真实 CLI</div><div class="k">manual</div><div>视觉/音色/撤销审批</div></div></div>
+            <div class="panel"><h4>Testability</h4><div class="row"><span class="tag green">0 blocker</span><span class="small muted">test-strategy.md · v2</span></div><div class="small muted" style="margin-top:8px">CI：check-fast + check + e2e；fixture 必须覆盖 auth/429/403/empty/truncated。</div></div>
+          </div>
+        </div>
+
+        <div class="tabpane" id="bp-graph">
+          <div class="row between"><h4>任务图 · 39 tasks</h4><div class="actions"><button class="btn small">表格</button><button class="btn small">分层</button><button class="btn small">导出 JSON</button></div></div>
+          <div class="callout warn">1 条 write_scope 冲突：T-08 与 T-12 都会写 packages/core；将排队。</div>
+          <table class="table">
+            <thead><tr><th>ID</th><th>标题</th><th>依赖</th><th>write_scope</th><th>AC</th><th>test_levels</th><th>user_gate</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">T-002</td><td>控制面骨架</td><td>—</td><td class="mono">orchestrator/lib</td><td>AC-1</td><td>unit, contract</td><td>—</td></tr>
+              <tr><td class="mono">T-008</td><td>模型目录与 probe</td><td>T-002</td><td class="mono">orchestrator/lib/control</td><td>AC-4,5</td><td>unit, integration</td><td>—</td></tr>
+              <tr><td class="mono">T-012</td><td>Inbox/Read API</td><td>T-002</td><td class="mono">orchestrator/lib/read</td><td>AC-2</td><td>contract, e2e</td><td>—</td></tr>
+              <tr><td class="mono">T-020</td><td>G1 生成任务</td><td>T-008,T-012</td><td class="mono">.collab/blueprint</td><td>AC-8</td><td>integration</td><td>U-G1</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="tabpane" id="bp-matrix">
+          <div class="callout">双向覆盖：AC → 任务 → 测试层。缺失的格子会标红。</div>
+          <table class="table">
+            <thead><tr><th>AC</th><th>unit</th><th>contract</th><th>integration</th><th>e2e</th><th>manual</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">AC-1</td><td>T-002</td><td>T-002</td><td>—</td><td>—</td><td>—</td></tr>
+              <tr><td class="mono">AC-4</td><td>T-008</td><td>T-008</td><td>T-008</td><td>—</td><td>—</td></tr>
+              <tr><td class="mono">AC-8</td><td>—</td><td>T-020</td><td>T-020</td><td>T-020</td><td>U-G1</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="tabpane" id="bp-gate">
+          <div class="row between"><h4>G1 · Blueprint 准出</h4><span class="tag yellow">未评估</span></div>
+          <table class="table">
+            <thead><tr><th>Check</th><th>结果</th><th>证据</th><th>可豁免</th></tr></thead>
+            <tbody>
+              <tr><td>B1 task-graph schema</td><td><span class="tag green">pass</span></td><td class="mono small">task-graph.json</td><td>否</td></tr>
+              <tr><td>B2 依赖无环</td><td><span class="tag green">pass</span></td><td class="mono small">graph.json#acyclic</td><td>否</td></tr>
+              <tr><td>B3 AC 双向覆盖</td><td><span class="tag red">fail</span></td><td class="mono small">AC-8 e2e 缺失</td><td>否</td></tr>
+              <tr><td>B4 review pass ≤3</td><td><span class="tag yellow">pending</span></td><td class="mono small">review-v2</td><td>用户裁决</td></tr>
+              <tr><td>B6 模型隔离</td><td><span class="tag yellow">waived</span></td><td class="mono small">wvr-01</td><td>是</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- BUILD -->
+    <section class="page" id="page-build" aria-labelledby="build-title">
+      <div class="subhead">
+        <div>
+          <h1 class="title" id="build-title">Build</h1>
+          <div class="subtitle">M1 · 4/9 merged · E2E 未运行 · 业务轮次 2/3 · 基础设施重试 4（不计轮次）</div>
+        </div>
+        <div class="actions"><button class="btn">运行 E2E</button><button class="btn">批准 G2</button></div>
+      </div>
+      <div class="panel">
+        <div class="row between" style="margin-bottom:8px">
+          <div class="actions"><select class="project"><option>里程碑：M1</option><option>M2</option></select><select class="project"><option>来源：全部</option><option>Blueprint</option><option>独立</option></select><select class="project"><option>状态：全部</option></select></div>
+          <span class="small muted">筛选 · 3 个任务等待中</span>
+        </div>
+        <table class="table">
+          <thead><tr><th>任务</th><th>来源</th><th>测试层级</th><th>T gate</th><th>状态</th><th>模型</th><th>耗时</th></tr></thead>
+          <tbody>
+            <tr><td><b>004</b> 宿主状态机</td><td class="mono">BP·T-002</td><td>unit, integration</td><td><span class="tag green">pass</span></td><td><span class="tag blue">running</span></td><td class="mono">gpt-6.1-sol</td><td>12m</td></tr>
+            <tr><td><b>005</b> 角色包加载</td><td class="mono">BP·T-008</td><td>contract, e2e</td><td><span class="tag yellow">pending</span></td><td><span class="tag yellow">waiting</span></td><td class="mono">—</td><td>—</td></tr>
+            <tr><td><b>006</b> 模型目录 UI</td><td class="mono">BP·T-012</td><td>unit, e2e</td><td><span class="tag green">pass</span></td><td><span class="tag green">merged</span></td><td class="mono">claude-opus-5-5</td><td>18m</td></tr>
+            <tr><td><b>007</b> 审批哈希</td><td class="mono">BP·T-020</td><td>integration, manual</td><td><span class="tag red">stale</span></td><td><span class="tag red">held</span></td><td class="mono">gpt-6.1-sol</td><td>9m</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="cols-2" style="margin-top:12px">
+        <div class="panel">
+          <h3>任务 004 · 宿主状态机</h3>
+          <div class="kv">
+            <div class="k">来源</div><div>Blueprint T-002 · <span class="tag green">G1 有效</span></div>
+            <div class="k">模型身份</div><div><span class="mono">requested gpt-6.1-sol → resolved gpt-6.1-sol</span> <span class="tag yellow">unverified</span></div>
+            <div class="k">轮次</div><div>业务 2/3 · 基础设施重试 4（不计轮次）</div>
+            <div class="k">T gate</div><div><span class="tag green">pass</span> · 6 checks · 0 waiver</div>
+          </div>
+          <div class="callout" style="margin-top:10px">合并前会重新求 T gate；若批准失效，状态转为 <span class="mono">held</span>。</div>
+        </div>
+        <div class="panel">
+          <h3>里程碑 M1</h3>
+          <div class="bar" style="margin:10px 0"><span style="width:44%"></span></div>
+          <div class="small muted">4/9 merged · E2E 未运行 · G2 未批准</div>
+          <div class="actions" style="margin-top:10px"><button class="btn">查看 E2E 清单</button><button class="btn primary">批准 G2</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="page" id="page-settings" aria-labelledby="settings-title">
+      <div class="subhead"><div><h1 class="title" id="settings-title">设置</h1><div class="subtitle">模型目录 · 角色矩阵 · Provider · 预算与轮次 · 变更历史</div></div><div class="actions"><button class="btn">导出配置</button><button class="btn">变更历史</button></div></div>
+      <div class="panel">
+        <div class="subnav" role="tablist"><button class="active" data-pane="set-models">模型目录</button><button data-pane="set-roles">角色矩阵</button><button data-pane="set-providers">Provider</button><button data-pane="set-budget">预算与轮次</button><button data-pane="set-history">变更历史</button></div>
+
+        <div class="tabpane active" id="set-models">
+          <div class="row between" style="margin-bottom:10px"><div class="actions"><button class="btn">扫描 CLI</button><button class="btn">手动登记</button><button class="btn">建议 (2)</button></div><div class="actions"><select class="project"><option>厂商：全部</option></select><select class="project"><option>档位：全部</option></select><select class="project"><option>状态：全部</option></select><input class="project" placeholder="搜索模型…" /></div></div>
+          <table class="table">
+            <thead><tr><th>模型</th><th>厂商</th><th>通道</th><th>档位</th><th>身份</th><th>可调用</th><th>最近验证</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">claude-opus-5-5</td><td>anthropic</td><td>claude</td><td>top (allowlist)</td><td><span class="tag green">verified</span></td><td>✓</td><td>今天 09:12</td><td><span class="tag green">active</span></td><td><button class="btn small">探测</button></td></tr>
+              <tr><td class="mono">gpt-6.1-sol</td><td>openai</td><td>codex</td><td>top (allowlist)</td><td><span class="tag yellow">unverified</span></td><td>✓</td><td>今天 09:13</td><td><span class="tag green">active</span></td><td><button class="btn small">探测</button></td></tr>
+              <tr><td class="mono">claude-opus-4-5</td><td>anthropic</td><td>claude</td><td>advanced (allowlist)</td><td><span class="tag green">verified</span></td><td>✓</td><td>3 天前 ⚠过期</td><td><span class="tag yellow">active</span></td><td><button class="btn small">探测</button></td></tr>
+              <tr><td class="mono">gemini-4-argon-high</td><td>google</td><td>gemini</td><td>未定级 (discovered)</td><td>—</td><td>—</td><td>—</td><td><span class="tag">discovered</span></td><td><button class="btn small">设档位</button></td></tr>
+            </tbody>
+          </table>
+          <div class="callout" style="margin-top:10px">展开一行可看：别名、canonical id、identity_group、context/tools/effort/readonly 能力、发现来源、tier 证据、最近 5 次 probe、被哪些角色使用。</div>
+        </div>
+
+        <div class="tabpane" id="set-roles">
+          <div class="row between" style="margin-bottom:8px"><div><h3 style="margin:0">Blueprint</h3><span class="small muted">配置 rev 13</span></div><div class="actions"><button class="btn">预览变更</button><button class="btn primary">编辑</button></div></div>
+          <table class="table">
+            <thead><tr><th>角色</th><th>主选</th><th>备选</th><th>要求</th><th>约束</th><th>probe</th></tr></thead>
+            <tbody>
+              <tr><td>设计师</td><td class="mono">claude-opus-5-5</td><td>—</td><td>top</td><td>✓</td><td><span class="tag green">✓ 09:12</span></td></tr>
+              <tr><td>评审</td><td class="mono">gpt-6.1-sol</td><td>—</td><td>top · ≠设计厂商</td><td>✓</td><td><span class="tag yellow">⚠ 身份未验证</span></td></tr>
+              <tr><td>测试架构师</td><td class="muted">未设置</td><td>—</td><td>top · ≠两者</td><td><span class="tag red">✗ 缺 top 模型</span></td><td>—</td></tr>
+            </tbody>
+          </table>
+          <div class="callout warn" style="margin-top:10px">硬约束未满足：三角色须两两不同且均为 top；当前只有 2 个 top 模型。先手动登记或调整范围。</div>
+        </div>
+
+        <div class="tabpane" id="set-providers">
+          <table class="table">
+            <thead><tr><th>Provider</th><th>CLI</th><th>版本</th><th>认证</th><th>能力</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td>claude</td><td class="mono">claude</td><td>2.1.0</td><td><span class="tag green">logged in</span></td><td>read, stream, effort</td><td><span class="tag green">ready</span></td></tr>
+              <tr><td>codex</td><td class="mono">codex</td><td>0.166</td><td><span class="tag red">not logged in</span></td><td>read-only, stream</td><td><span class="tag red">unavailable</span></td></tr>
+              <tr><td>gemini</td><td class="mono">antigravity</td><td>2.29</td><td><span class="tag green">ready</span></td><td>read-only, long-context</td><td><span class="tag green">ready</span></td></tr>
+            </tbody>
+          </table>
+          <div class="callout" style="margin-top:10px">Provider 版本超出 tested_range 时标 degraded；probe 失败不自动降级；修复命令显示在详情里。</div>
+        </div>
+
+        <div class="tabpane" id="set-budget">
+          <div class="cols-3">
+            <div class="panel"><h3>Studio</h3><div class="kv"><div class="k">每决策轮次</div><div>2</div><div class="k">总预算</div><div>$40 / 4M token</div></div></div>
+            <div class="panel"><h3>Blueprint</h3><div class="kv"><div class="k">轮次上限</div><div>3</div><div class="k">追加</div><div>每次 +1，需授权</div></div></div>
+            <div class="panel"><h3>Build</h3><div class="kv"><div class="k">业务轮次</div><div>3</div><div class="k">基础设施重试</div><div>不计业务轮次</div></div></div>
+          </div>
+        </div>
+
+        <div class="tabpane" id="set-history">
+          <div class="callout">配置变更历史：rev 12 → 13 · 角色矩阵 · 2026-11-06 09:10 · user</div>
+          <div class="callout">配置变更历史：rev 11 → 12 · 模型档位 · 2026-11-05 21:44 · user</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer"><span>◈ AgentLine UI mockup · static · 2026-11-06</span><span>快捷键：⌘K 命令面板 · ? 帮助 · ⚙ 设置</span></div>
+  </main>
+</div>
+
+<dialog id="approveDialog">
+  <div class="dlg-h">批准 G1 · Blueprint</div>
+  <div class="dlg-b">
+    <p>批准绑定内容 <span class="hash">sha256:9f2c1a7b3d4e…</span>；之后任何文件改动都会让批准失效。</p>
+    <p>等价命令：<span class="mono">/agentline blueprint approve G1 9f2c1a7b3d4e "&lt;你的原话&gt;"</span></p>
+    <label class="small muted">批准原话（必填）<br /><input class="project" style="width:100%;margin-top:5px" placeholder="例如：批准进入 Build" /></label>
+    <p class="small muted" style="margin-top:10px">当前 revision：41 · 通道：ui</p>
+  </div>
+  <div class="dlg-f"><button class="btn" onclick="closeApprove()">取消</button><button class="btn primary" onclick="closeApprove()">确认批准</button></div>
+</dialog>
+
+<script>
+  const pages = [...document.querySelectorAll('.page')];
+  const tops = [...document.querySelectorAll('.stage, .tab, [data-page].chip')];
+  function showPage(id){
+    pages.forEach(p => p.classList.toggle('active', p.id === 'page-' + id));
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === id));
+    document.querySelectorAll('.stage').forEach(t => t.classList.toggle('active', t.dataset.page === id));
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+  document.querySelectorAll('[data-page]').forEach(el => el.addEventListener('click', () => {
+    const id = el.dataset.page;
+    if (document.getElementById('page-' + id)) showPage(id);
+  }));
+  document.querySelectorAll('.subnav [data-pane]').forEach(btn => btn.addEventListener('click', () => {
+    const group = btn.closest('.panel');
+    group.querySelectorAll('.subnav [data-pane]').forEach(b => b.classList.toggle('active', b === btn));
+    group.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('active', p.id === btn.dataset.pane));
+  }));
+  function openApprove(){ document.getElementById('approveDialog').showModal(); }
+  function closeApprove(){ document.getElementById('approveDialog').close(); }
+  document.getElementById('approveDialog').addEventListener('click', e => { if (e.target.id === 'approveDialog') closeApprove(); });
+</script>
+</body>
+</html>
