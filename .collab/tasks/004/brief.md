@@ -20,4 +20,11 @@
 
 - 从 P6 合并后的 `main` 创建 `task/004`。
 - 不重写 Studio/Build；复用 P6 的 roles/channels/stages。
-- dev 使用 `deepseek-v4-pro`。
+- dev 使用 `cursor-wsl-grok-4.7`（WSL Cursor）。
+
+## 验收格式（必须）
+
+`acceptance.md` 必须使用 `tools/ci-runner.ps1` 可解析格式：每个 `## AC-n` 下一个 ```pwsh 代码块，最后一行输出 `AC-n OK`，并写明期望。
+
+至少覆盖：插件语法；Blueprint new/run/review/approve/materialize；G1 正反例；依赖/AC/矩阵/身份/哈希失效；UI Blueprint 真实/空/错误状态；完整回归。
+
