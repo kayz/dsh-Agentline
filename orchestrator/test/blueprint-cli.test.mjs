@@ -6,7 +6,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createSession, decisionContentHash, confirmedEvidenceHash, evaluateG0 } from '../lib/studio.mjs'
-import { canonicalHash } from '../lib/blueprint.mjs'
+import { canonicalHash, materializeBlueprint, BlueprintError } from '../lib/blueprint.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI = path.resolve(HERE, '..', 'agentline.mjs')
@@ -409,6 +409,43 @@ test('blueprint cli: approval goes stale, re-approve, then materialize keeps fid
   assert.equal(replay.status, 0, replay.stderr + replay.stdout)
   assert.match(replay.stdout, /replayed/)
   assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '003')), false)
+  const ids = fs.readdirSync(path.join(ctx.repo, '.collab', 'tasks')).filter((name) => /^\d+$/.test(name)).sort()
+  assert.deepEqual(ids, ['001', '002'])
+})
+
+test('blueprint cli: a failed session save during materialize leaves no tasks or record', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  drive(ctx, 'rollback')
+  const approved = ctx.run(['approve', '--id', 'rollback', '--text', '批准后模拟提交失败'])
+  assert.equal(approved.status, 0, approved.stderr + approved.stdout)
+
+  const statePath = path.join(ctx.dir('rollback'), 'state.json')
+  const recordPath = path.join(ctx.dir('rollback'), 'materialized.json')
+  const before = fs.readFileSync(statePath, 'utf8')
+  assert.throws(
+    () => materializeBlueprint(ctx.repo, 'rollback', {
+      beforeSessionSave() { throw new BlueprintError('E_COMMIT', 'session save failed') },
+    }),
+    (err) => err instanceof BlueprintError && /session save failed/.test(err.message),
+  )
+  assert.equal(fs.readFileSync(statePath, 'utf8'), before)
+  assert.equal(fs.existsSync(recordPath), false)
+  assert.equal(fs.existsSync(recordPath + '.tmp'), false)
+  assert.equal(fs.existsSync(path.join(ctx.dir('rollback'), '.stage')), false)
+  assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001')), false)
+  assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '002')), false)
+
+  const done = ctx.run(['materialize', '--id', 'rollback'])
+  assert.equal(done.status, 0, done.stderr + done.stdout)
+  assert.match(done.stdout, /materialized/)
+  assert.match(done.stdout, /T-001->001/)
+  assert.match(done.stdout, /T-002->002/)
+  assert.equal(fs.existsSync(recordPath), true)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).status, 'materialized')
+  const replay = ctx.run(['materialize', '--id', 'rollback'])
+  assert.equal(replay.status, 0, replay.stderr + replay.stdout)
+  assert.match(replay.stdout, /replayed/)
   const ids = fs.readdirSync(path.join(ctx.repo, '.collab', 'tasks')).filter((name) => /^\d+$/.test(name)).sort()
   assert.deepEqual(ids, ['001', '002'])
 })

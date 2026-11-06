@@ -78,8 +78,13 @@ function readText(file) {
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = file + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8')
-  fs.renameSync(tmp, file)
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8')
+    fs.renameSync(tmp, file)
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }) } catch { /* 不留下半截临时文件 */ }
+    throw e
+  }
 }
 function writeText(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -799,27 +804,19 @@ function normalizeFindings(raw) {
 }
 
 function unresolvedBlocking(findings) {
-  if (!Array.isArray(findings)) return ['findings:invalid']
-  const bad = []
-  for (const f of findings) {
-    if (!isObject(f) || !f.id) { bad.push('finding:invalid'); continue }
-    const knownSev = f.severity === 'blocking' || f.severity === 'major' || f.severity === 'minor'
-    const knownStatus = f.status === 'open' || f.status === 'resolved' || f.status === 'disputed'
-    if (!knownSev || !knownStatus) { bad.push(`${f.id}:invalid`); continue }
-    if (f.severity === 'blocking' && f.status !== 'resolved') bad.push(f.id)
-  }
-  return bad
+  // 与写入时的 normalizeFindings 同一套：非空 id/text、合法 severity/status。
+  // 缺字段或空白不能因为 status 是 resolved 就当成已通过的评审。
+  const normalized = normalizeFindings(findings)
+  if (!normalized) return ['findings:invalid']
+  return normalized.filter((f) => f.severity === 'blocking' && f.status !== 'resolved').map((f) => f.id)
 }
 
 function openBlockers(testability) {
-  const list = testability && Array.isArray(testability.blockers) ? testability.blockers : null
-  if (!list) return ['testability:invalid']
-  const bad = []
-  for (const b of list) {
-    if (!isObject(b) || (b.status !== 'open' && b.status !== 'resolved')) { bad.push('blocker:invalid'); continue }
-    if (b.status === 'open') bad.push(b.id || 'blocker')
-  }
-  return bad
+  if (!testability || !Array.isArray(testability.blockers)) return ['testability:invalid']
+  // 与写入时的 normalizeBlockers 同一套：非空 id/text、status 只能是 open|resolved。
+  const normalized = normalizeBlockers(testability.blockers)
+  if (!normalized) return ['blocker:invalid']
+  return normalized.filter((b) => b.status === 'open').map((b) => b.id)
 }
 
 // ───────────────────────────── 执行一步 ─────────────────────────────
@@ -1438,7 +1435,7 @@ function renderBrief(task, taskId, depLines, acLines) {
   return lines.join('\n')
 }
 
-export function materializeBlueprint(repo, id, { dryRun = false, now } = {}) {
+export function materializeBlueprint(repo, id, { dryRun = false, now, beforeSessionSave = null } = {}) {
   const r = loadForWrite(repo, id)
   const g1 = evaluateG1(repo, id, { now })
   if (!g1.checks_pass) {
@@ -1487,8 +1484,10 @@ export function materializeBlueprint(repo, id, { dryRun = false, now } = {}) {
   if (dryRun) return { ok: true, replayed: false, dry_run: true, tasks: mapping, plan_digest: plan, g1 }
 
   const staged = path.join(r.dir, '.stage')
+  const recordPath = path.join(r.dir, 'materialized.json')
   fs.rmSync(staged, { recursive: true, force: true })
   const moved = []
+  let recordWritten = false
   try {
     for (const task of ordered) {
       const m = mapping.find((x) => x.node === task.id)
@@ -1524,13 +1523,20 @@ export function materializeBlueprint(repo, id, { dryRun = false, now } = {}) {
       tasks: mapping.map((m) => ({ node: m.node, task: m.task, node_sha256: m.node_sha256 })),
       created_at: now || nowIso(),
     }
-    writeJson(path.join(r.dir, 'materialized.json'), record)
+    writeJson(recordPath, record)
+    recordWritten = true
     fs.rmSync(staged, { recursive: true, force: true })
+    if (typeof beforeSessionSave === 'function') beforeSessionSave()
     saveSession(r.dir, { ...r.session, status: 'materialized', awaiting: null, last_error: null })
     return { ok: true, replayed: false, dry_run: false, tasks: record.tasks, plan_digest: plan, g1 }
   } catch (e) {
     for (const dest of moved) { try { fs.rmSync(dest, { recursive: true, force: true }) } catch { /* rollback */ } }
     try { fs.rmSync(staged, { recursive: true, force: true }) } catch { /* ignore */ }
+    // 会话没写上时，物化记录也不能留下，否则会指向已经删掉的任务。
+    if (recordWritten) {
+      try { fs.rmSync(recordPath, { force: true }) } catch { /* rollback */ }
+      try { fs.rmSync(recordPath + '.tmp', { force: true }) } catch { /* rollback */ }
+    }
     throw e
   }
 }

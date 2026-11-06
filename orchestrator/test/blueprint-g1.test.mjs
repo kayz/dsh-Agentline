@@ -426,6 +426,78 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     assert.equal(check(g, 'G1.review_pass').pass, true)
   })
 
+  await t.test('a resolved blocker missing id or text stays a failed testability check', () => {
+    const id = branch(ctx.repo, 'base', 'tbbad')
+    const file = path.join(sessionDir(ctx.repo, id), 'testability.json')
+    const tb = readJson(file)
+    const digests = { ...tb.input_digests }
+    tb.blockers = [{ status: 'resolved' }, { id: '   ', status: 'resolved', text: '空白编号' }, { id: 'TB-2', status: 'resolved', text: '   ' }]
+    writeJson(file, tb)
+    assert.deepEqual(readJson(file).input_digests, digests)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.testability_clear').pass, false)
+    assert.match(check(g, 'G1.testability_clear').evidence, /blocker:invalid/)
+    assert.doesNotMatch(check(g, 'G1.testability_clear').evidence, /stale_evidence/)
+    assert.equal(check(g, 'G1.review_pass').pass, true)
+    assert.equal(g.checks_pass, false)
+    assert.equal(g.approval_valid, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '坏掉的 blocker 也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.testability_clear|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+
+    const okId = branch(ctx.repo, 'base', 'tbok')
+    const okFile = path.join(sessionDir(ctx.repo, okId), 'testability.json')
+    const ok = readJson(okFile)
+    ok.blockers = [{ id: 'TB-9', status: 'resolved', text: '已经可测' }]
+    writeJson(okFile, ok)
+    const okG = evaluateG1(ctx.repo, okId)
+    assert.equal(check(okG, 'G1.testability_clear').pass, true)
+  })
+
+  await t.test('a finding missing id or text is not a passing review', () => {
+    const id = branch(ctx.repo, 'base', 'findbad')
+    const file = path.join(sessionDir(ctx.repo, id), 'review-v1.verdict.json')
+    const review = readJson(file)
+    const digests = { ...review.input_digests }
+    review.verdict = 'pass'
+    review.findings = [
+      { status: 'resolved', severity: 'blocking' },
+      { id: '   ', severity: 'major', status: 'resolved', text: '空白编号' },
+      { id: 'F-2', severity: 'minor', status: 'resolved', text: '   ' },
+      { id: 1, severity: 'minor', status: 'resolved', text: '编号不是字符串' },
+    ]
+    writeJson(file, review)
+    assert.deepEqual(readJson(file).input_digests, digests)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.review_pass').pass, false)
+    assert.match(check(g, 'G1.review_pass').evidence, /findings:invalid/)
+    assert.doesNotMatch(check(g, 'G1.review_pass').evidence, /stale_evidence/)
+    assert.equal(check(g, 'G1.testability_clear').pass, true)
+    assert.equal(g.checks_pass, false)
+    assert.equal(g.approval_valid, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '坏掉的 finding 也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.review_pass|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+
+    const dupId = branch(ctx.repo, 'base', 'finddup')
+    const dupFile = path.join(sessionDir(ctx.repo, dupId), 'review-v1.verdict.json')
+    const dup = readJson(dupFile)
+    dup.findings = [
+      { id: 'F-1', severity: 'blocking', status: 'resolved', text: '第一条' },
+      { id: 'F-1', severity: 'minor', status: 'resolved', text: '重复编号' },
+    ]
+    writeJson(dupFile, dup)
+    const dupG = evaluateG1(ctx.repo, dupId)
+    assert.equal(check(dupG, 'G1.review_pass').pass, false)
+    assert.match(check(dupG, 'G1.review_pass').evidence, /findings:invalid/)
+  })
+
   await t.test('a fourth review round fails the round limit while the latest pass can still match', () => {
     const id = branch(ctx.repo, 'base', 'rounds')
     const dir = sessionDir(ctx.repo, id)
