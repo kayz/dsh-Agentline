@@ -6,6 +6,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runBuild, runStep } from '../lib/step.mjs'
+import { evaluateBuildGate } from '../lib/build.mjs'
 import { acquireTaskLock, releaseTaskLock } from '../lib/registry.mjs'
 import { readState } from '../lib/state.mjs'
 
@@ -100,6 +101,13 @@ test('runBuild reaches pr_open and a failed dev step does not advance', async (t
   assert.equal(done.status, 'pr_open')
   assert.equal(readState(taskDir).status, 'pr_open')
   assert.deepEqual(calls.map((c) => c.role), ['design', 'dev', 'review'])
+  const gate = evaluateBuildGate(repo, taskDir, { config: config() })
+  const evidence = Object.fromEntries(gate.gate.checks.map((item) => [item.id, item.evidence]))
+  assert.equal(evidence['T.origin_valid'], 'legacy')
+  assert.equal(evidence['T.ci_all_pass'], 'pass', JSON.stringify(evidence))
+  assert.equal(evidence['T.verdict_pass'], 'pass', JSON.stringify(evidence))
+  assert.equal(evidence['T.isolation'], 'pass', JSON.stringify(evidence))
+  assert.equal(gate.result.pass, true, JSON.stringify(gate.gate.checks))
 
   const again = makeRepo()
   t.after(() => fs.rmSync(again.repo, { recursive: true, force: true }))

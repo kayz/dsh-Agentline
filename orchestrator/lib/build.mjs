@@ -452,9 +452,15 @@ function commandProved(row) {
   return true
 }
 
-function headCommitMs(repo) {
+/** 最近一次改动产品文件的提交时间。.collab 里的审计、评审和 PR 状态不算。 */
+function productCommitMs(repo) {
   try {
-    const out = execFileSync('git', ['log', '-1', '--format=%ct', 'HEAD'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    const out = execFileSync(
+      'git',
+      ['log', '-1', '--format=%ct', 'HEAD', '--', '.', ':(exclude).collab'],
+      { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
+    if (!out) return null
     const sec = Number(out)
     return Number.isFinite(sec) ? sec * 1000 : null
   } catch {
@@ -469,9 +475,9 @@ function ciFreshness(repo, value, classified) {
   }
   const ran = Date.parse(value.ranAt)
   if (!Number.isFinite(ran)) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
-  const headMs = headCommitMs(repo)
-  if (headMs == null) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
-  if (headMs > ran + 1000) return { status: 'stale', pass: false, evidence: 'stale' }
+  const productMs = productCommitMs(repo)
+  if (productMs == null) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
+  if (productMs > ran + 1000) return { status: 'stale', pass: false, evidence: 'stale' }
   return classified
 }
 
@@ -532,6 +538,31 @@ function resolveCommit(repo, rev) {
   }
 }
 
+/** 产品代码快照：排除 .collab。审计提交和 PR 状态不改变这份快照。 */
+function codeDigest(repo, rev) {
+  let out
+  try {
+    out = execFileSync('git', ['ls-tree', '-r', '-z', rev], {
+      cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return null
+  }
+  const rows = []
+  for (const line of out.split('\0')) {
+    if (!line) continue
+    const tab = line.indexOf('\t')
+    if (tab < 0) continue
+    const file = line.slice(tab + 1).replaceAll('\\', '/')
+    if (file === '.collab' || file.startsWith('.collab/')) continue
+    const meta = line.slice(0, tab).split(' ')
+    if (meta.length < 3 || meta[1] !== 'blob') continue
+    rows.push(`${meta[0]} ${meta[2]} ${file}`)
+  }
+  rows.sort()
+  return sha256Content(rows.join('\n'))
+}
+
 function classifyVerdict(repo, taskDir) {
   const verdict = latestVerdict(taskDir)
   if (verdict.state === 'missing') return { status: 'unknown', pass: false, evidence: 'unknown:missing' }
@@ -541,10 +572,16 @@ function classifyVerdict(repo, taskDir) {
   if (!sha || !/^[0-9a-f]{7,64}$/i.test(sha)) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
   const head = resolveCommit(repo, 'HEAD')
   const reviewed = resolveCommit(repo, sha)
-  if (head && reviewed && head === reviewed) return { status: 'pass', pass: true, evidence: 'pass' }
+  if (!head || !reviewed) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  if (head === reviewed) return { status: 'pass', pass: true, evidence: 'pass' }
   const ancestor = gitAncestor(repo, sha)
-  if (ancestor === 'unknown' || !head || !reviewed) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
-  return { status: 'stale', pass: false, evidence: 'stale' }
+  if (ancestor === 'unknown') return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  if (ancestor !== 'yes') return { status: 'stale', pass: false, evidence: 'stale' }
+  const reviewedTree = codeDigest(repo, reviewed)
+  const headTree = codeDigest(repo, head)
+  if (!reviewedTree || !headTree) return { status: 'unknown', pass: false, evidence: 'unknown:git_sha' }
+  if (reviewedTree !== headTree) return { status: 'stale', pass: false, evidence: 'stale' }
+  return { status: 'pass', pass: true, evidence: 'pass' }
 }
 
 function classifyOrigin(inspected) {
@@ -635,7 +672,7 @@ export function evaluateBuildGate(repo, taskDir, { config = {} } = {}) {
   const checks = [
     check('T.origin_valid', '来源批准仍然有效，且 node_sha256 与当前节点一致', classifyOrigin(origin)),
     check('T.ci_all_pass', 'CI 报告有效、非空且全部通过', ci),
-    check('T.verdict_pass', '评审 verdict 为 pass，且 git_sha 就是当前 HEAD', verdict),
+    check('T.verdict_pass', '评审 verdict 为 pass，且 git_sha 的产品代码与当前 HEAD 一致', verdict),
     check('T.isolation', '开发与评审的实际身份不同，且每次调用与锁一致', isolation),
   ]
   let head = null

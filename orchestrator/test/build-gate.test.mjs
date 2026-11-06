@@ -214,6 +214,38 @@ test('CI older than HEAD and a verdict that is not an ancestor are stale', (t) =
   assert.equal(moved.evidence, 'stale')
 })
 
+test('collab-only commits keep the reviewed code fresh, and a later product commit does not', (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const code = git(repo, ['rev-parse', 'HEAD']).trim()
+  const ranAtMs = Date.now() + 5000
+  writeAcceptance(taskDir, ['AC-1', 'AC-2'])
+  writeCi(taskDir, passReport(new Date(ranAtMs).toISOString()))
+  fs.writeFileSync(path.join(taskDir, 'verdict.json'), JSON.stringify({ verdict: 'pass', git_sha: code }))
+  fs.writeFileSync(path.join(taskDir, 'audit-note.txt'), 'audit\n', 'utf8')
+  git(repo, ['add', '-A'])
+  git(repo, ['commit', '-qm', 'audit only'])
+  const kept = evaluateBuildGate(repo, taskDir)
+  assert.equal(kept.gate.checks.find((item) => item.id === 'T.ci_all_pass').evidence, 'pass')
+  assert.equal(kept.gate.checks.find((item) => item.id === 'T.verdict_pass').evidence, 'pass')
+  assert.equal(kept.gate.checks.find((item) => item.id === 'T.verdict_pass').pass, true)
+
+  fs.writeFileSync(path.join(repo, 'later.txt'), 'later\n', 'utf8')
+  git(repo, ['add', '-A'])
+  execFileSync('git', ['commit', '-qm', 'product'], {
+    cwd: repo,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: new Date(ranAtMs + 5000).toISOString(),
+      GIT_COMMITTER_DATE: new Date(ranAtMs + 5000).toISOString(),
+    },
+  })
+  const moved = evaluateBuildGate(repo, taskDir)
+  assert.equal(moved.gate.checks.find((item) => item.id === 'T.verdict_pass').evidence, 'stale')
+  assert.equal(moved.gate.checks.find((item) => item.id === 'T.ci_all_pass').evidence, 'stale')
+  assert.equal(moved.result.pass, false)
+})
+
 test('non-waivable CI failure cannot be waived and a consistent gate can pass', (t) => {
   const { repo, taskDir } = makeRepo()
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }))

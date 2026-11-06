@@ -63,6 +63,19 @@ T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pa
 
 这一轮自测：`node --check` 三个入口通过；`node --test` 覆盖 `build-gate` 与 `build-roles` 共 8 项通过；`cd orchestrator && npm test` 为 179 通过；`node --test plugin/test/*.test.mjs` 为 20 通过。
 
+## 新鲜度绑到产品代码
+
+评审指出：正常跑到 `pr_open` 之后，T gate 会把本次评审标成过期，CI 也可能过期。原因是 CI 在 review 之前执行，review 和 PR 随后各自 `commitAll`。这两次提交只写入 `.collab` 里的评审产物和状态。旧判定拿最新 HEAD 的时间比 `ranAt`，并要求 `git_sha` 等于最新 HEAD，所以审计提交一落地，证据就变成 `stale`。
+
+现在两处都只看产品代码，`.collab/**` 不算在内：
+
+- `T.ci_all_pass` 的时间比较对象是最近一次改动产品文件的提交。读不出这份提交、缺少 `ranAt`，或产品提交比 `ranAt` 晚超过 1 秒，仍是未知或 `stale`。只追加 `.collab` 不会把一份本来新鲜的报告标过期。
+- `T.verdict_pass` 在 `git_sha` 就是 HEAD 时通过。它是 HEAD 的祖先时，再用 `git ls-tree` 比较两边排除 `.collab` 之后的产品快照；快照相同则通过，产品文件变了则 `stale`。不是祖先（例如 amend 掉的旧提交）仍是 `stale`。解析不了仍是 `unknown:git_sha`。
+
+`build-execution.test.mjs` 在 `runBuild` 到达 `pr_open` 后求值 T gate，四项证据分别为 `legacy`、`pass`、`pass`、`pass`，总结果通过。`build-gate.test.mjs` 另加一条：只提交 `.collab` 时 CI 和评审保持通过；再提交产品文件 `later.txt` 后两项都是 `stale`。
+
+这一轮自测：`node --check` 三个入口后输出 `AC-1 OK`；`node --test` 四份 Build 测试 16 项通过；`cd orchestrator && npm test` 为 180 通过；`node --test plugin/test/*.test.mjs` 为 20 通过。
+
 ## 偏差与剩余
 
 没有改验收要求以外的字段或章节。`plugin/locale/**` 未改，Build 文案和现有驾驶舱一样写在 `client.js`。完整运行到 `pr_open` 依赖 PATH 上的 `pwsh` 和 `orchestrator/tools/ci-runner.ps1`，这是原有 CI 入口。
