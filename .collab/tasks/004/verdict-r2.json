@@ -1,0 +1,17 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "328352416226f3bf06aa9ed5e4732dfc7e3bdf9d",
+  "passed": 3,
+  "total": 5,
+  "findings": [
+    {"severity":"P1","description":"G1 重读时接受缺少必需字段的 resolved blocker 或损坏的 finding，使无效证据可通过并重新批准。","evidence":"orchestrator/lib/blueprint.mjs:773-822,1143-1145,1204"},
+    {"severity":"P1","description":"物化写入 materialized.json 后保存 session 失败时只回滚任务目录，留下部分物化记录。","evidence":"orchestrator/lib/blueprint.mjs:1527-1534; orchestrator/test/blueprint-cli.test.mjs:367-408"}
+  ],
+  "results": [
+    {"id":"AC-1","pass":true,"evidence":".collab/tasks/004/ci-results.json:10-16，退出码 0，AC-1 OK"},
+    {"id":"AC-2","pass":false,"evidence":".collab/tasks/004/ci-results.json:19-25，4 通过，退出码 0，AC-2 OK；orchestrator/lib/blueprint.mjs:1527-1534 的失败回滚留下部分记录"},
+    {"id":"AC-3","pass":false,"evidence":".collab/tasks/004/ci-results.json:28-34，24 通过，退出码 0，AC-3 OK；orchestrator/lib/blueprint.mjs:801-822,1143-1145 接受无效的落盘条目"},
+    {"id":"AC-4","pass":true,"evidence":".collab/tasks/004/ci-results.json:37-43，7 通过，退出码 0，AC-4 OK；plugin/test/blueprint-ui.test.mjs 覆盖真实、空、错误、切换及动作"},
+    {"id":"AC-5","pass":true,"evidence":".collab/tasks/004/ci-results.json:46-52，退出码 0，orchestrator 139 通过，插件 17 通过，AC-5 OK"}
+  ]
+}
