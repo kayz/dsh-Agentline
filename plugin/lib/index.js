@@ -5,7 +5,7 @@
  * 每个项目自己的 .collab/tasks 就是它的任务库。
  *
  * 提供：
- *   - 路由 /agentline/{metrics,projects,tasks,task,flow}
+ *   - 路由 /agentline/{metrics,projects,tasks,task,flow,pipeline,catalog}
  *   - 工具 agentline_metrics / agentline_status / agentline_flow
  *   - 斜杠命令 /agentline（为当前工作区启用）
  */
@@ -849,6 +849,29 @@ export function apply(ctx, config) {
           const keep = u.searchParams.get('keep') === '1'
           sendJson(res, { ok: true, job: startFlow(project, task, Number(u.searchParams.get('rounds') || 2), { resume, keep }) })
         } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }, 500) }
+      })
+
+      // 只读：Studio / Blueprint / Build 阶段摘要（转发 orchestrator/lib/pipeline.mjs，不写盘）
+      route('/agentline/pipeline', 'agentline: pipeline', async (req, res) => {
+        try {
+          if (req.method && req.method !== 'GET') return sendJson(res, { ok: false, error: 'GET only' }, 405)
+          const u = new URL(req.url || '/', 'http://localhost')
+          const project = resolveProject(u.searchParams.get('project'))
+          const mod = await importFresh(path.join(agentlineHome(), 'lib', 'pipeline.mjs'))
+          sendJson(res, { ok: true, project, summary: mod.readPipelineSummary(project) })
+        } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }) }
+      })
+
+      // 只读：模型目录与 Provider 发现缓存（转发 orchestrator 的 config + model-catalog，不写盘）
+      route('/agentline/catalog', 'agentline: catalog', async (req, res) => {
+        try {
+          if (req.method && req.method !== 'GET') return sendJson(res, { ok: false, error: 'GET only' }, 405)
+          const cfgMod = await importFresh(path.join(agentlineHome(), 'lib', 'config.mjs'))
+          const mc = await importFresh(path.join(agentlineHome(), 'lib', 'model-catalog.mjs'))
+          const loaded = cfgMod.loadConfig({ orchestratorRoot: agentlineHome() })
+          const cache = readJsonFile(loaded.paths.models)
+          sendJson(res, { ok: true, catalog: mc.buildCatalog({ config: loaded.config, discovery: cache }), discovery: loaded.discovery || null })
+        } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }) }
       })
     })
   } catch (e) {

@@ -58,6 +58,21 @@ window.__ModuleLoader__.load({
       '.agl-btn:hover{border-color:rgba(255,255,255,.3)}',
       '.agl-fine{color:#8b949e;font-size:11px}',
       '.agl-route{display:flex;gap:8px;align-items:center;margin:4px 0}',
+      '.agl-tabs{display:flex;gap:2px;padding:0 12px;border-bottom:1px solid rgba(255,255,255,.08);overflow-x:auto;white-space:nowrap;flex-shrink:0}',
+      '.agl-tab{background:transparent;border:0;border-bottom:2px solid transparent;color:#8b949e;padding:8px 12px;cursor:pointer;font-size:13px;white-space:nowrap}',
+      '.agl-tab.on{color:var(--dsw-alias-label-primary,#e6edf3);border-bottom-color:#58a6ff}',
+      '.agl-badge{display:inline-block;margin-left:5px;padding:0 6px;border-radius:999px;font-size:11px;background:rgba(210,153,34,.18);color:#d29922}',
+      '.agl-page{flex:1;min-height:0;overflow:auto;padding:12px 16px}',
+      '.agl-build{flex:1;min-height:0;display:flex;flex-direction:column}',
+      '.agl-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);gap:12px}',
+      '@media(max-width:900px){.agl-grid2{grid-template-columns:1fr}}',
+      '.agl-card{border:1px solid rgba(255,255,255,.1);border-left:3px solid #d29922;border-radius:8px;padding:8px 10px;margin-bottom:8px;background:rgba(255,255,255,.02)}',
+      '.agl-card.bad{border-left-color:#f85149}',
+      '.agl-card.ok{border-left-color:#3fb950}',
+      '.agl-tag{display:inline-flex;align-items:center;padding:0 6px;border-radius:6px;border:1px solid rgba(255,255,255,.14);font-size:11px;color:#8b949e;white-space:nowrap}',
+      '.agl-box{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:rgba(255,255,255,.02);min-width:0;overflow-x:auto}',
+      '.agl-box h4{margin:0 0 8px;font-size:11px;letter-spacing:.06em;color:#8b949e;font-weight:600}',
+      '.agl-btn:disabled,.agl-icon:disabled{opacity:.45;cursor:default}',
     ].join('\n')
 
     if (typeof document !== 'undefined' && document.head) {
@@ -90,6 +105,18 @@ window.__ModuleLoader__.load({
       reviewed: '#3fb950', pr_open: '#a371f7', merged: '#3fb950', blocked: '#f85149',
     }
     const STAGES = ['draft', 'designed', 'implemented', 'reviewable', 'reviewed', 'pr_open', 'merged']
+    const TABS = [['home', '首页'], ['studio', 'Studio'], ['blueprint', 'Blueprint'], ['build', 'Build'], ['settings', '设置']]
+    const TAB_IDS = TABS.map((t) => t[0])
+    const SLASH_COMMANDS = [
+      { cmd: '/agentline', desc: '显示当前工作区的任务数与运行中数量', ok: true },
+      { cmd: '/agentline <目标>', desc: '在当前工作区新建任务并启动 flow（design → dev → CI → review）', ok: true },
+      { cmd: '/agentline --project <路径> <目标>', desc: '指定工作区派活', ok: true },
+      { cmd: '/agentline studio …', desc: 'Studio 立项与讨论', ok: false },
+      { cmd: '/agentline blueprint …', desc: 'Blueprint 设计与 G1', ok: false },
+      { cmd: '/agentline approve …', desc: 'gate 批准（需原话）', ok: false },
+    ]
+    const STAGE_TEXT = { not_started: '未开始', idle: '空闲' }
+    const SOURCE_TEXT = { blueprint: 'Blueprint', adhoc: '独立' }
 
     function stageClass(stage, current) {
       const c = STAGES.indexOf(current)
@@ -224,15 +251,73 @@ window.__ModuleLoader__.load({
       const [pendingFocus, setPendingFocus] = React.useState(null)
       const [project, setProject] = React.useState(null)
       const [routing, setRouting] = React.useState(null)
-      const [routeOpen, setRouteOpen] = React.useState(false)
+      const [tab, setTab] = React.useState(() => { try { const v = window.localStorage.getItem('agentline.tab'); return TAB_IDS.includes(v) ? v : 'home' } catch { return 'home' } })
+      const [summary, setSummary] = React.useState(null)
+      const [notices, setNotices] = React.useState(null)
+      const [pipeline, setPipeline] = React.useState(null)
+      const [catalog, setCatalog] = React.useState(null)
+      const [showAllEvents, setShowAllEvents] = React.useState(false)
+      const [routeMsg, setRouteMsg] = React.useState('')
+      const [sourceErrors, setSourceErrors] = React.useState({})
+      const [projectsReady, setProjectsReady] = React.useState(false)
+      const [liveReady, setLiveReady] = React.useState(false)
+      const [listReady, setListReady] = React.useState(false)
+      const [detailError, setDetailError] = React.useState('')
       const [saving, setSaving] = React.useState(false)
       const [draft, setDraft] = React.useState({})
       const [modelsData, setModelsData] = React.useState(null)
       const [matrix, setMatrix] = React.useState({ design: [], dev: [], review: [] })
       const [matrixMsg, setMatrixMsg] = React.useState('')
 
+      // 访问代次区分 A → B → A；任务代次同时隔离同项目内的切换和写操作反馈。
+      const view = React.useRef({ alive: true, epoch: 0, taskEpoch: 0 })
+      const requests = React.useRef({})
+      Object.assign(view.current, { project, task: current, mode: logMode })
+      const begin = (key) => { const n = (requests.current[key] || 0) + 1; requests.current[key] = n; return n }
+      const scope = () => ({ ...view.current })
+      const valid = (s, task = false) => view.current.alive && s.epoch === view.current.epoch && s.project === view.current.project &&
+        (!task || (s.taskEpoch === view.current.taskEpoch && s.task === view.current.task))
+      const latest = (key, n, s, task = false) => requests.current[key] === n && valid(s, task)
+      const sourceError = (key, message) => setSourceErrors((e) => ({ ...e, [key]: message }))
+      const failure = (r) => (r && r.error) || '读取失败（网络、响应格式或宿主路由不可用）'
+      const clearTask = () => {
+        view.current.taskEpoch++
+        setDetail(null); setDetailError(''); setLogFile(null); setLogMode('readable')
+        view.current.mode = 'readable'
+        setInjectText(''); setInjectKind('note'); setAnswerText('')
+        setMergeAsk(false); setMerging(false); setMergeMsg('')
+      }
+      const selectTask = (id) => {
+        if (id === view.current.task) return
+        clearTask()
+        view.current.task = id
+        setCurrent(id)
+      }
+      const switchProject = (p) => {
+        if (p === view.current.project) return
+        view.current.epoch++
+        view.current.project = p
+        clearTask()
+        view.current.task = null
+        setProject(p); setCurrent(null); setTasks([]); setTokens(null); setListReady(false)
+        setPipeline(null); setRouting(null); setDraft({}); setRouteMsg(''); setSaving(false)
+        setPendingFocus(null); setErr(null)
+        setSourceErrors((e) => ({ ...e, routing: '' }))
+      }
+      const openTask = (projectPath, taskId) => {
+        setTab('build')
+        if (projectPath && projectPath !== project) {
+          switchProject(projectPath)
+          setPendingFocus({ project: projectPath, task: taskId })
+        } else selectTask(taskId)
+      }
+      const projTitle = (p) => { const x = projects.find((y) => y.path === p); return x ? x.title : (p ? String(p).split(/[\\/]/).pop() : '—') }
+      const srcOf = (id) => { const t = pipeline && pipeline.ok ? ((pipeline.summary && pipeline.summary.tasks) || []).find((x) => x.id === id) : null; return t ? t.source : null }
+      const taskReady = !!(listReady && tasks.some((t) => t.id === current) && detail && detail.task === current && project && !detailError)
+
       const doMerge = async (mode = 'permission') => {
-        if (!detail || !project) return
+        if (!taskReady || project !== view.current.project || current !== view.current.task || merging || (mode === 'permission' && !mergeAsk) || (mode === 'grant' && detail.state?.merge_risk?.tier !== 'low')) return
+        const s = scope()
         setMerging(true)
         setMergeMsg('')
         try {
@@ -246,12 +331,14 @@ window.__ModuleLoader__.load({
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload),
           }).catch(() => null)
+          if (!valid(s, true)) return
           if (!resp) { setMergeMsg('合并失败：请求发不出去'); return }
           if (resp.status === 404) {
             setMergeMsg('合并失败：插件宿主还是旧版本（缺 /agentline/merge），请重启 DSH 再试')
             return
           }
           const res = await resp.json().catch(() => null)
+          if (!valid(s, true)) return
           if (res && res.ok) {
             if (mode === 'check') setMergeMsg((res.output || '').trim() || '分档检查完成')
             else {
@@ -263,38 +350,47 @@ window.__ModuleLoader__.load({
           } else {
             setMergeMsg((mode === 'check' ? '分档检查失败：' : '合并失败：') + ((res && (res.error || (res.output || '').split('\n').slice(-3).join(' '))) || 'unknown'))
           }
-        } finally { setMerging(false) }
+        } finally { if (valid(s, true)) setMerging(false) }
       }
 
       const control = async (action, text, kind) => {
-        if (!detail || !project) return
+        if (!taskReady || project !== view.current.project || current !== view.current.task) return
+        const s = scope()
         const q = '/agentline/control?action=' + action + '&task=' + encodeURIComponent(detail.task) + '&project=' + encodeURIComponent(project)
         if (action === 'inject') {
           if (!text || !text.trim()) return
           await fetch(q, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, kind: kind || injectKind }) }).then((r) => r.json()).catch(() => null)
+          if (!valid(s, true)) return
           setInjectText('')
         } else if (action === 'answer') {
           if (!text || !text.trim()) return
           await fetch(q, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) }).then((r) => r.json()).catch(() => null)
+          if (!valid(s, true)) return
           setAnswerText('')
         } else {
           await j(q)
         }
+        if (!valid(s, true)) return
         loadList(project)
         loadDetail(detail.task, project)
       }
 
       const resumeFlow = async (task) => {
-        if (!task || !project) return
+        if (!taskReady || project !== view.current.project || current !== view.current.task || task !== current) return
+        const s = scope()
         const q = '/agentline/flow?task=' + encodeURIComponent(task) + '&project=' + encodeURIComponent(project) + '&resume=1'
         await j(q)
+        if (!valid(s, true)) return
         loadList(project)
         loadDetail(task, project)
       }
 
       const loadModels = async () => {
+        const n = begin('models')
         const r = await j('/agentline/models')
-        if (!r || !r.ok) return
+        if (!view.current.alive || requests.current.models !== n) return
+        sourceError('models', r && r.ok ? '' : failure(r))
+        if (!r || !r.ok) { setModelsData(null); return }
         setModelsData(r)
         setMatrix({ design: (r.roles && r.roles.design) || [], dev: (r.roles && r.roles.dev) || [], review: (r.roles && r.roles.review) || [] })
       }
@@ -308,10 +404,13 @@ window.__ModuleLoader__.load({
       })
 
       const saveModels = async () => {
+        if (!modelsData) return
+        const n = begin('models')
         const res = await fetch('/agentline/models', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ roles: matrix }),
         }).then((r) => r.json()).catch(() => null)
+        if (!view.current.alive || requests.current.models !== n) return
         if (res && res.ok) {
           setModelsData(res)
           setMatrixMsg('已保存（下一个 flow 生效）')
@@ -321,9 +420,12 @@ window.__ModuleLoader__.load({
       }
 
       const loadRouting = async (proj) => {
-        if (!proj) return
+        if (!proj || proj !== view.current.project) return
+        const s = scope(), n = begin('routing')
         const r = await j('/agentline/routing?project=' + encodeURIComponent(proj))
-        if (!r || !r.ok) return
+        if (!latest('routing', n, s)) return
+        sourceError('routing', r && r.ok ? '' : failure(r))
+        if (!r || !r.ok) { setRouting(null); setDraft({}); return }
         setRouting(r)
         const d = {}
         for (const role of ['design', 'dev', 'review']) {
@@ -334,25 +436,32 @@ window.__ModuleLoader__.load({
       }
 
       const saveRouting = async () => {
-        if (!project) return
+        if (!project || project !== view.current.project || !routing || saving) return
+        const s = scope(), n = begin('routing')
         setSaving(true)
+        setRouteMsg('')
         try {
           const res = await fetch('/agentline/routing?project=' + encodeURIComponent(project), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ routing: draft }),
-          }).then((x) => x.json())
-          if (res && res.ok) { setRouting(res); setRouteOpen(false) }
-        } finally { setSaving(false) }
+          }).then((x) => x.json()).catch(() => null)
+          if (!latest('routing', n, s)) return
+          if (res && res.ok) { setRouting(res); setRouteMsg('已保存（下一次 flow 生效）') }
+          else setRouteMsg('保存失败：' + ((res && res.error) || 'unknown'))
+        } finally { if (valid(s)) setSaving(false) }
       }
 
       const loadProjects = async () => {
+        const s = scope(), n = begin('projects')
         const p = await j('/agentline/projects')
-        if (!p || !p.ok) return
+        if (!view.current.alive || requests.current.projects !== n) return
+        sourceError('projects', p && p.ok ? '' : failure(p))
+        if (!p || !p.ok) { setProjectsReady(false); return }
         const list = p.projects || []
         setProjects(list)
-        setProject((prev) => {
-          if (prev) return prev
+        setProjectsReady(true)
+        if (valid(s)) {
           let saved = null
           let focus = null
           let focusTaskId = null
@@ -363,32 +472,42 @@ window.__ModuleLoader__.load({
             window.localStorage.removeItem('agentline.focusProject')
             window.localStorage.removeItem('agentline.focusTask')
           } catch { /* ignore */ }
-          if (focusTaskId) setPendingFocus({ project: focus, task: focusTaskId })
           const wanted = focus || saved
           const exists = wanted && list.some((x) => x.path === wanted)
-          return exists ? wanted : (p.default || (list[0] && list[0].path) || null)
-        })
+          const target = focus && exists ? focus : (view.current.project || (exists ? wanted : (p.default || (list[0] && list[0].path) || null)))
+          if (target !== view.current.project) switchProject(target)
+          if (focusTaskId) { setPendingFocus({ project: target, task: focusTaskId }); setTab('build') }
+        }
       }
 
       const loadList = async (proj) => {
+        if (!proj || proj !== view.current.project) return
+        const s = scope(), n = begin('list')
         const q = proj ? '?project=' + encodeURIComponent(proj) : ''
         const [t, m] = await Promise.all([j('/agentline/tasks' + q), j('/agentline/metrics')])
-        if (!t || !t.ok) { setErr((t && t.error) || '无法读取任务列表'); return }
+        if (!latest('list', n, s)) return
+        if (!t || !t.ok) { setErr((t && t.error) || '无法读取任务列表'); setListReady(false); return }
         setErr(null)
+        setListReady(true)
         setTasks(t.tasks || [])
         setTokens(t.tokens || null)
         setMetrics(m)
       }
 
       const loadDetail = async (task, proj, mode) => {
-        if (!task) return
+        if (!task || proj !== view.current.project || task !== view.current.task) return
+        const s = scope(), n = begin('detail')
+        const requestedMode = mode || logMode
+        if (requestedMode !== view.current.mode) return
         const readable = (mode || logMode) !== 'raw'
         const q = '?task=' + encodeURIComponent(task) +
           '&tail=200' +
           (proj ? '&project=' + encodeURIComponent(proj) : '') +
           (readable ? '&render=1' : '')
         const d = await j('/agentline/task' + q)
-        if (!d || !d.ok) return
+        if (!latest('detail', n, s, true) || requestedMode !== view.current.mode) return
+        if (!d || !d.ok || d.task !== task) { setDetail(null); setDetailError(failure(d)); return }
+        setDetailError('')
         setDetail(d)
         setLogFile((prev) => {
           const files = (d.logs || []).map((x) => x.file)
@@ -397,41 +516,84 @@ window.__ModuleLoader__.load({
         })
       }
 
+      const loadPipeline = async (proj) => {
+        if (!proj || proj !== view.current.project) return
+        const s = scope(), n = begin('pipeline')
+        const r = await j('/agentline/pipeline?project=' + encodeURIComponent(proj))
+        if (!latest('pipeline', n, s)) return
+        setPipeline(r && r.ok && r.summary ? { ok: true, summary: r.summary } :
+          { ok: false, error: (r && r.error) || '读取失败（宿主可能未提供 /agentline/pipeline）' })
+      }
+      const loadCatalog = async () => {
+        const n = begin('catalog')
+        const r = await j('/agentline/catalog')
+        if (!view.current.alive || requests.current.catalog !== n) return
+        setCatalog(r && r.ok && r.catalog ? { ok: true, catalog: r.catalog, discovery: r.discovery } : { ok: false, error: failure(r) })
+      }
+      const loadSummary = async () => {
+        const n = begin('summary'), r = await j('/agentline/summary')
+        if (!view.current.alive || requests.current.summary !== n) return
+        sourceError('summary', r && r.ok ? '' : failure(r))
+        setSummary(r && r.ok ? { running: r.running || [], prOpen: r.prOpen || [], blocked: r.blocked || [] } : null)
+      }
+      const loadNotices = async () => {
+        const n = begin('notices'), r = await j('/agentline/notices')
+        if (!view.current.alive || requests.current.notices !== n) return
+        sourceError('notices', r && r.ok ? '' : failure(r))
+        setNotices(r && r.ok ? r.notices || [] : null)
+      }
+      const loadLive = async () => {
+        const n = begin('live'), r = await j('/agentline/live')
+        if (!view.current.alive || requests.current.live !== n) return
+        sourceError('live', r && r.ok ? '' : failure(r))
+        setLiveReady(!!(r && r.ok))
+        setLive(r && r.ok ? r.running || [] : [])
+      }
+      const refresh = () => {
+        loadProjects(); loadLive()
+        if (tab === 'settings') { loadRouting(project); loadModels(); loadCatalog() }
+        else { loadSummary(); loadNotices(); loadPipeline(project); loadList(project); loadDetail(current, project) }
+      }
+
       React.useEffect(() => {
+        view.current.alive = true
         loadProjects()
-        const tick = async () => {
-          const r = await j('/agentline/live')
-          if (r && r.ok) setLive(r.running || [])
-        }
-        tick()
-        const it = window.setInterval(tick, 3000)
-        return () => window.clearInterval(it)
+        loadLive(); loadSummary(); loadNotices()
+        const timers = [[loadLive, 3000], [loadSummary, 5000], [loadNotices, 10000]].map(([f, ms]) => window.setInterval(f, ms))
+        return () => { view.current.alive = false; view.current.epoch++; Object.keys(requests.current).forEach(begin); timers.forEach((it) => window.clearInterval(it)) }
       }, [])
+
+      React.useEffect(() => { try { window.localStorage.setItem('agentline.tab', tab) } catch { /* ignore */ } }, [tab])
+
+      React.useEffect(() => {
+        if (tab === 'settings') { loadRouting(project); loadModels(); loadCatalog() }
+      }, [tab, project])
 
       React.useEffect(() => {
         if (!project) return
         try { window.localStorage.setItem('agentline.lastProject', project) } catch { /* ignore */ }
         loadList(project)
-        loadRouting(project)
+        loadPipeline(project)
         const it = window.setInterval(() => loadList(project), 5000)
-        return () => window.clearInterval(it)
+        const pit = window.setInterval(() => loadPipeline(project), 15000)
+        return () => { begin('list'); begin('pipeline'); begin('routing'); window.clearInterval(it); window.clearInterval(pit) }
       }, [project])
 
       React.useEffect(() => {
         if (!current || !project) return
         loadDetail(current, project)
         const it = window.setInterval(() => loadDetail(current, project), 5000)
-        return () => window.clearInterval(it)
+        return () => { begin('detail'); window.clearInterval(it) }
       }, [current, project, logMode])
 
       React.useEffect(() => {
-        if (pendingFocus && pendingFocus.task && tasks.some((t) => t.id === pendingFocus.task)) {
-          setCurrent(pendingFocus.task)
+        if (pendingFocus && pendingFocus.task && (!pendingFocus.project || pendingFocus.project === project) && tasks.some((t) => t.id === pendingFocus.task)) {
+          selectTask(pendingFocus.task)
           setPendingFocus(null)
           return
         }
-        if (!current && tasks.length) setCurrent(tasks[tasks.length - 1].id)
-      }, [tasks.length, pendingFocus])
+        if (!current && tasks.length) selectTask(tasks[tasks.length - 1].id)
+      }, [tasks, pendingFocus])
 
       const recs = (metrics && metrics.records) || []
       const pick = (src, key) => recs.find((x) => x.source === src && x.key === key) || { value: null }
@@ -442,8 +604,107 @@ window.__ModuleLoader__.load({
         return f ? f.lines || [] : []
       })()
 
-      return h('div', { className: 'agl-panel' },
-        h('div', { className: 'agl-top' },
+      const table = (headers, rows) => h('table', { className: 'agl-t' },
+        h('thead', null, h('tr', null, headers.map((v) => h('th', { key: v }, v)))),
+        h('tbody', null, rows))
+      const box = (title, ...children) => h('section', { className: 'agl-box' }, h('h4', null, title), ...children)
+      const fine = (text) => h('div', { className: 'agl-fine' }, text)
+      const label = (it) => (it.project || projTitle(it.projectPath)) + ' #' + it.task
+      const runningText = (it) => label(it) + ' · ' + it.role + (it.round ? ' r' + it.round : '') + ' · ' +
+        (it.modelId || it.model || '—') + ' · ' + (it.backend || '—') + ' · ' + Math.round((it.age_s || 0) / 60) + 'm'
+      const pending = summary ? summary.blocked.length + summary.prOpen.length : 0
+
+      const renderHome = () => {
+        const blocked = summary ? summary.blocked : []
+        const prOpen = summary ? summary.prOpen : []
+        const human = blocked.filter((it) => it.reason === 'awaiting_human')
+        const other = blocked.filter((it) => it.reason !== 'awaiting_human')
+        const focus = human[0] || other[0] || prOpen[0] || live[0]
+        const focusText = human.length ? '⏸ ' + label(focus) + ' designer 等待回答' :
+          other.length ? '⛔ ' + label(focus) + ' 阻塞：' + focus.reason :
+          prOpen.length ? '✅ ' + label(focus) + ' 评审通过，等待合并许可' :
+          focus ? '▶ ' + runningText(focus) : '没有需要你处理的事项。'
+        const cards = [
+          ...other.map((it) => ({ it, tag: '阻塞', style: ' bad', text: '原因：' + it.reason, button: '查看任务' })),
+          ...human.map((it) => ({ it, tag: '问题', style: '', text: 'designer 等待回答；在 Build 详情中回答后 flow 会继续', button: '去回答' })),
+          ...prOpen.map((it) => ({ it, tag: '可批准', style: ' ok', text: '评审通过，等待人类合并许可', button: '去合并' })),
+        ]
+        const summaryStatus = sourceErrors.summary || '读取中…'
+        return h('div', { className: 'agl-grid2' },
+          h('div', null,
+            box('现在卡在哪', summary === null ? fine(summaryStatus) : h('div', { className: 'agl-route' },
+              h('span', { style: { flex: 1 } }, focusText),
+              focus ? h('button', { className: 'agl-btn', onClick: () => openTask(focus.projectPath, focus.task) }, '打开') : null)),
+            box('项目组合' + (projectsReady || projects.length ? ' (' + projects.length + ')' : ''),
+              sourceErrors.projects ? fine(sourceErrors.projects) : projects.length ? table(['项目', '任务', '进行中', '最近状态', '待处理', '运行中'], projects.map((p) => h('tr', {
+                key: p.path, title: p.path, tabIndex: 0, style: { cursor: 'pointer' },
+                onClick: () => switchProject(p.path), onKeyDown: (e) => { if (e.key === 'Enter') switchProject(p.path) },
+              },
+                h('td', null, p.title, p.path === project ? h('span', { className: 'agl-tag' }, '当前') : null),
+                h('td', null, p.tasks ? p.tasks.total : '—'), h('td', null, p.tasks ? p.tasks.active : '—'),
+                h('td', null, (p.tasks && p.tasks.last) || '—'),
+                h('td', null, summary === null ? '—' : blocked.concat(prOpen).filter((it) => it.projectPath === p.path).length),
+                h('td', null, liveReady ? live.filter((it) => it.projectPath === p.path).length : '—'),
+              ))) : fine(projectsReady ? '没有已登记的项目（在某个工作区用 /agentline 派活后会自动登记）' : '读取中…')),
+            box('待处理' + (summary ? ' (' + pending + ')' : ''), summary === null ? fine(summaryStatus) :
+              cards.length ? cards.map(({ it, tag, style, text, button }, i) => h('div', { key: i, className: 'agl-card' + style },
+                h('div', { className: 'agl-route' }, h('span', { className: 'agl-tag' }, tag), h('b', null, label(it))),
+                fine(text), h('button', { className: 'agl-btn', onClick: () => openTask(it.projectPath, it.task) }, button))) : fine('没有需要你处理的事项。')),
+            box('运行中' + (liveReady || live.length ? ' (' + live.length + ')' : ''), sourceErrors.live ? fine(sourceErrors.live) :
+              live.length ? live.map((it, i) => h('div', { key: i, className: 'agl-item', onClick: () => openTask(it.projectPath, it.task) }, runningText(it))) :
+                fine(liveReady ? '当前没有运行中的任务' : '读取中…')),
+            box('最近事件', notices === null ? fine(sourceErrors.notices || '读取中…') : notices.length ? h(React.Fragment, null,
+              (showAllEvents ? notices : notices.slice(0, 6)).map((it, i) => h('div', { key: i, className: 'agl-item', onClick: () => openTask(it.projectPath, it.task) },
+                when(it.at) + ' · ' + label(it) + ' · ' + ({ pr_open: '评审通过', merged: '已合并', blocked: '阻塞' }[it.event] || it.event) + (it.reason ? '：' + it.reason : ''))),
+              notices.length > 6 ? h('button', { className: 'agl-btn', onClick: () => setShowAllEvents(!showAllEvents) }, showAllEvents ? '收起' : '展开全部') : null) : fine('暂无事件')),
+          ),
+          h('div', null, box('斜杠命令', SLASH_COMMANDS.map((it) => h('div', { key: it.cmd, style: { marginBottom: '12px', opacity: it.ok ? 1 : .55 } },
+            h('code', null, it.cmd), ' ', it.ok ? h('button', { className: 'agl-btn', onClick: async () => {
+              try { await navigator.clipboard.writeText(it.cmd) } catch { /* ignore */ }
+            } }, '复制') : h('span', { className: 'agl-tag' }, '未实现'), fine(it.desc))),
+          fine('LLM 工具：agentline_status · agentline_flow · agentline_metrics'))),
+        )
+      }
+
+      const renderStage = (kind, title) => {
+        let content
+        if (pipeline === null) content = fine('读取中…')
+        else if (!pipeline.ok) content = fine('无法读取 ' + title + ' 数据：' + pipeline.error)
+        else {
+          const stage = pipeline.summary?.stages?.[kind]
+          if (!stage || !Array.isArray(stage.sessions)) content = fine('无法读取 ' + title + ' 数据：阶段摘要格式无效')
+          else if (!stage.sessions.length) content = h(React.Fragment, null,
+            fine(kind === 'studio' ? '这个项目还没有 Studio 记录（.collab/studio 下没有会话）。' : '这个项目还没有 Blueprint 记录（.collab/blueprint 下没有会话）。'),
+            fine(kind === 'studio' ? 'Studio 状态机尚未接入驾驶舱；这里只读展示已有数据，不推断状态。' : '状态：未开始'))
+          else content = h(React.Fragment, null, fine('状态：' + (STAGE_TEXT[stage.status] || stage.status)),
+            table(['会话', '状态', '更新时间'], stage.sessions.map((s) => h('tr', { key: s.id }, h('td', null, s.id), h('td', null, s.status), h('td', null, when(s.updated_at))))),
+            kind === 'studio' ? fine('轮次、问题、G0 等详情：未实现') : null)
+        }
+        return box(title + ' 会话', content, kind === 'blueprint' ? fine('G1：未实现') : null)
+      }
+      const renderStudio = () => renderStage('studio', 'Studio')
+      const renderBlueprint = () => renderStage('blueprint', 'Blueprint')
+
+      const renderCatalog = () => {
+        const status = catalog === null ? '读取中…' : !catalog.ok ? '无法读取模型目录：' + catalog.error : null
+        const models = catalog && catalog.ok ? catalog.catalog.models || [] : []
+        const discovery = catalog && catalog.ok ? catalog.discovery : null
+        const providers = [...new Set([...(discovery?.providers || []), ...models.map((m) => m.provider).filter(Boolean)])].sort()
+        return h(React.Fragment, null,
+          box('模型目录（只读）', status ? fine(status) : !models.length ? fine('暂无模型目录数据（运行 agentline models discover 或 agentline models add）') :
+            table(['模型', 'Provider', 'id', '档位', '身份', '可用性', '来源'], models.map((m) => h('tr', { key: m.key },
+              [m.key, m.provider || '—', m.id, m.tier, m.identity, m.availability, m.source].map((v, i) => h('td', { key: i }, v)))))),
+          box('Provider（只读）', status ? fine(status) : h(React.Fragment, null,
+            discovery?.generatedAt ? fine('发现缓存：' + when(discovery.generatedAt)) : null,
+            providers.length ? table(['Provider', '模型数', 'callable', 'discovered'], providers.map((p) => {
+              const ms = models.filter((m) => m.provider === p)
+              return h('tr', { key: p }, h('td', null, p), h('td', null, ms.length),
+                h('td', null, ms.filter((m) => m.availability === 'callable').length), h('td', null, ms.filter((m) => m.availability === 'discovered').length))
+            })) : fine('暂无 Provider 数据'))),
+        )
+      }
+
+      const renderTop = () => h('div', { className: 'agl-top' },
           h('span', { className: 'agl-title' }, 'AgentLine 驾驶舱'),
           live.length ? h('span', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
             live.map((l, i) => h('span', {
@@ -455,14 +716,15 @@ window.__ModuleLoader__.load({
               `${l.project} #${l.task} ${l.role}·${String(l.modelId || l.model || '').replace('claude-', '').replace('gpt-', '')}`,
               h('span', { className: 'agl-fine', style: { marginLeft: '2px' } }, Math.round((l.age_s || 0) / 60) + 'm'),
             )),
-          ) : h('span', { className: 'agl-fine' }, '空闲'),
+          ) : h('span', { className: 'agl-fine' }, sourceErrors.live || (liveReady ? '空闲' : '读取中…')),
           h('span', { style: { width: '1px', height: '14px', background: 'rgba(255,255,255,.12)' } }),
           h('select', {
             value: project || '',
             title: '项目（DSH 工作区）',
-            onChange: (e) => { setProject(e.target.value); setCurrent(null); setDetail(null) },
+            disabled: !projectsReady,
+            onChange: (e) => switchProject(e.target.value),
           }, projects.length === 0
-            ? h('option', { value: '' }, '(无工作区)')
+            ? h('option', { value: '' }, sourceErrors.projects ? '项目读取失败' : projectsReady ? '(无工作区)' : '读取中…')
             : projects.map((p) => h('option', { key: p.path, value: p.path }, p.title + (p.tasks && p.tasks.total ? ' · ' + p.tasks.total : '')))),
           h('span', { className: 'agl-metric' }, 'Claude 5h ', h('b', { style: { color: pctColor(pick('claude', 'claude.session').value), display: 'inline-block', minWidth: '38px', textAlign: 'right' } }, pct(pick('claude', 'claude.session').value))),
           h('span', { className: 'agl-metric' }, '7d ', h('b', { style: { color: pctColor(pick('claude', 'claude.weekly').value), display: 'inline-block', minWidth: '38px', textAlign: 'right' } }, pct(pick('claude', 'claude.weekly').value))),
@@ -475,18 +737,23 @@ window.__ModuleLoader__.load({
             style: { minWidth: '190px', textAlign: 'right', display: 'inline-block' },
             title: '本项目（' + (project || '') + '）累计 token：输入 / 输出',
           }, '本项目 token ' + compact(tokens.total.input) + ' in · ' + compact(tokens.total.output) + ' out') : null,
-          h('button', { className: 'agl-icon', title: '刷新：重新读取项目、任务与用量', onClick: () => { loadProjects(); loadList(project); loadDetail(current, project) } }, '↻'),
-          h('button', { className: 'agl-icon', title: '设置：本项目首选模型 + 全局模型可用角色', onClick: () => { if (!routeOpen) { loadRouting(project); loadModels() } setRouteOpen(!routeOpen) } }, '⚙'),
-        ),
-        routeOpen ? h('div', { className: 'agl-sec', style: { background: 'rgba(88,166,255,.05)' } },
+          h('button', { className: 'agl-icon', title: '刷新：重新读取当前页数据', onClick: refresh }, '↻'),
+          h('button', { className: 'agl-icon', title: '设置', onClick: () => setTab('settings') }, '⚙'),
+        )
+
+      const renderSettings = () => h(React.Fragment, null,
+        h('div', { className: 'agl-box' },
           h('h4', null, '角色路由 · 仅影响本项目'),
+          sourceErrors.routing ? h('div', { className: 'agl-fine' }, sourceErrors.routing) : !routing ? h('div', { className: 'agl-fine' }, '读取中…') : null,
           ['design', 'dev', 'review'].map((role) => h('div', { key: role, className: 'agl-route' },
             h('span', { className: 'agl-fine', style: { width: '60px' } }, role),
             h('select', {
+              disabled: !routing || saving,
               value: (draft[role] && draft[role].model) || '',
               onChange: (e) => setDraft((d) => ({ ...d, [role]: { ...(d[role] || {}), model: e.target.value } })),
             }, ((routing && routing.models) || []).map((m) => h('option', { key: m.key, value: m.key }, m.key + ' · ' + m.backend))),
             h('select', {
+              disabled: !routing || saving,
               value: (draft[role] && draft[role].policy) || 'quality',
               onChange: (e) => setDraft((d) => ({ ...d, [role]: { ...(d[role] || {}), policy: e.target.value } })),
             },
@@ -494,8 +761,14 @@ window.__ModuleLoader__.load({
               h('option', { value: 'speed' }, '速度优先')),
             h('span', { className: 'agl-fine' }, '当前顺序：' + (((routing && routing.roles && routing.roles[role] && routing.roles[role].order) || []).join(' > '))),
           )),
+          h('div', { className: 'agl-route' },
+            h('button', { className: 'agl-btn', onClick: saveRouting, disabled: saving || !routing || !project }, saving ? '保存中…' : '保存'),
+            h('span', { className: 'agl-fine' }, routeMsg)),
+          h('div', { className: 'agl-fine' }, '保存后下一次 flow 生效（写入 .collab/agentline.json）'),
+        ),
+        h('div', { className: 'agl-box' },
+          h('h4', null, '全局：哪些模型可以在哪些角色上使用'),
           modelsData ? h('div', { style: { marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.1)' } },
-            h('h4', { style: { margin: '0 0 6px' } }, '全局：哪些模型可以在哪些角色上使用'),
             h('div', { className: 'agl-fine', style: { marginBottom: '6px' } },
               '这里只影响候选顺序（所有工作区通用）；每个工作区的首选模型在上一节设置。勾选 = 允许该角色使用。'),
             h('table', { className: 'agl-t' },
@@ -504,7 +777,7 @@ window.__ModuleLoader__.load({
                 ['design', 'dev', 'review'].map((r) => h('th', { key: r }, r)))),
               h('tbody', null, (modelsData.models || []).map((m) => h('tr', { key: m.key },
                 h('td', null, m.key),
-                h('td', { className: 'agl-fine' }, m.backend.replace('-cli', '')),
+                h('td', { className: 'agl-fine' }, (m.backend || '—').replace('-cli', '')),
                 h('td', { className: 'agl-fine' }, m.id),
                 ['design', 'dev', 'review'].map((role) => h('td', { key: role },
                   h('input', {
@@ -518,52 +791,23 @@ window.__ModuleLoader__.load({
               h('button', { className: 'agl-btn', onClick: saveModels }, '保存全局设置'),
               matrixMsg ? h('span', { className: 'agl-fine' }, matrixMsg) : null,
             ),
-          ) : null,
-          h('div', { style: { marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' } },
-            h('button', { className: 'agl-btn', onClick: saveRouting, disabled: saving }, saving ? '保存中…' : '保存'),
-            h('button', { className: 'agl-btn', onClick: () => setRouteOpen(false) }, '关闭'),
-            h('span', { className: 'agl-fine' }, '保存后下一次 flow 生效（写入 .collab/agentline.json）'),
-          ),
-        ) : null,
-        err ? h('div', { className: 'agl-empty' }, err) : null,
-        h('div', { className: 'agl-sec' },
-          h('h4', null, '项目组合'),
-          h('div', {
-            style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '8px' },
-          }, projects.map((p) => {
-            const on = p.path === project
-            const total = (p.tasks && p.tasks.total) || 0
-            const active = (p.tasks && p.tasks.active) || 0
-            const last = (p.tasks && p.tasks.last) || null
-            return h('div', {
-              key: p.path,
-              title: p.path,
-              onClick: () => { setProject(p.path); setCurrent(null); setDetail(null) },
-              style: {
-                cursor: 'pointer', padding: '8px 10px', borderRadius: '8px',
-                border: '1px solid ' + (on ? 'rgba(88,166,255,.55)' : 'rgba(255,255,255,.1)'),
-                background: on ? 'rgba(88,166,255,.08)' : 'rgba(255,255,255,.02)',
-              },
-            },
-              h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
-                h('b', null, p.title),
-                on ? h('span', { className: 'agl-fine' }, '当前') : null,
-              ),
-              h('div', { className: 'agl-fine', style: { marginTop: '4px' } },
-                `${total} 个任务 · 进行中 ${active}` + (last ? ` · 最近 ${last}` : '')),
-            )
-          })),
+          ) : h('div', { className: 'agl-fine' }, sourceErrors.models || '读取中…'),
         ),
+        renderCatalog(),
+        h('div', { className: 'agl-fine' }, '路径、Node、默认仓库与额度凭据在 DSH「插件 → AgentLine」中设置。'),
+      )
+
+      const renderBuild = () => h('div', { className: 'agl-build' },
         h('div', { className: 'agl-body' },
           h('div', { className: 'agl-list' },
             tasks.length === 0
-              ? h('div', { className: 'agl-fine', style: { padding: '10px' } }, '暂无任务')
+              ? h('div', { className: 'agl-fine', style: { padding: '10px' } }, project && !listReady ? (err || '读取中…') : '暂无任务')
               : tasks.slice().reverse().map((t) => {
                   const st = (t.state && t.state.status) || '?'
                   return h('div', {
                     key: t.id,
                     className: 'agl-item' + (current === t.id ? ' on' : ''),
-                    onClick: () => setCurrent(t.id),
+                    onClick: () => selectTask(t.id),
                   },
                     h('div', { className: 'r1' },
                       h('span', { className: 'id' }, '#', t.id),
@@ -571,6 +815,8 @@ window.__ModuleLoader__.load({
                     ),
                     h('div', { className: 'meta' },
                       h('span', { className: 'agl-dot', style: { background: STATUS_COLOR[st] || '#8b949e' } }),
+                      h('span', { className: 'agl-tag' }, projTitle(project)), ' ',
+                      SOURCE_TEXT[srcOf(t.id)] ? h('span', { className: 'agl-tag' }, SOURCE_TEXT[srcOf(t.id)]) : null, ' ',
                       (t.state && t.state.model) || '—',
                       ' · ',
                       when(t.state && t.state.updated_at),
@@ -580,7 +826,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'agl-detail' },
             !detail
-              ? h('div', { className: 'agl-empty' }, '选择一个任务查看详情')
+              ? h('div', { className: 'agl-empty' }, detailError || '选择一个任务查看详情')
               : h(React.Fragment, null,
                   h('div', { className: 'agl-sec' },
                     h('h4', null, '阶段轨迹 · task #' + detail.task),
@@ -591,7 +837,7 @@ window.__ModuleLoader__.load({
                     (detail.state && detail.state.blocked_reason === 'interrupted') ? h('div', { style: { marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' } },
                       h('span', { className: 'agl-stage bad' }, '中断'),
                       h('span', { className: 'agl-fine' }, '上次运行被终止，停在 ' + ((detail.state.interrupted && detail.state.interrupted.from) || '?') + '；继续会丢弃未提交改动'),
-                      h('button', { className: 'agl-btn', onClick: () => resumeFlow(detail.task) }, '继续运行'),
+                      h('button', { className: 'agl-btn', disabled: !taskReady, onClick: () => resumeFlow(detail.task) }, '继续运行'),
                     ) : null,
                     (detail.state && detail.state.status === 'pr_open') ? h('div', {
                       style: {
@@ -608,13 +854,13 @@ window.__ModuleLoader__.load({
                       mergeAsk
                         ? h(React.Fragment, null,
                             h('span', { className: 'agl-fine' }, '确认把这个分支合进 main？'),
-                            h('button', { className: 'agl-btn', disabled: merging, onClick: () => doMerge('permission'), style: { borderColor: 'rgba(63,185,80,.6)' } }, merging ? '合并中…' : '确认合并'),
+                            h('button', { className: 'agl-btn', disabled: merging || !taskReady, onClick: () => doMerge('permission'), style: { borderColor: 'rgba(63,185,80,.6)' } }, merging ? '合并中…' : '确认合并'),
                             h('button', { className: 'agl-btn', onClick: () => setMergeAsk(false) }, '取消'))
-                        : h('button', { className: 'agl-btn', onClick: () => setMergeAsk(true), title: '合并需要人类确认：点击后还要再确认一次' }, '🔀 确认合并'),
+                        : h('button', { className: 'agl-btn', disabled: !taskReady, onClick: () => setMergeAsk(true), title: '合并需要人类确认：点击后还要再确认一次' }, '🔀 确认合并'),
                       detail.state.merge_risk?.tier === 'low'
-                        ? h('button', { className: 'agl-btn', disabled: merging, onClick: () => doMerge('grant'), title: '仅低档：使用当前仓库内有效的预授权合并' }, '⚡ 预授权合并')
+                        ? h('button', { className: 'agl-btn', disabled: merging || !taskReady, onClick: () => doMerge('grant'), title: '仅低档：使用当前仓库内有效的预授权合并' }, '⚡ 预授权合并')
                         : null,
-                      h('button', { className: 'agl-btn', disabled: merging, onClick: () => doMerge('check') }, '分档检查'),
+                      h('button', { className: 'agl-btn', disabled: merging || !taskReady, onClick: () => doMerge('check') }, '分档检查'),
                       mergeMsg ? h('span', { className: 'agl-fine' }, mergeMsg) : null,
                     ) : null,
                     (detail.stepLedger && detail.stepLedger.length) ? h('div', { className: 'agl-sec' },
@@ -632,8 +878,8 @@ window.__ModuleLoader__.load({
                           h('td', { className: 'agl-fine' }, x.reason || ''))))),
                     ) : null,
                     h('div', { className: 'agl-ctl', style: { marginTop: '8px' } },
-                      h('button', { className: 'agl-icon', title: '阶段末停止：当前阶段跑完后停下，不留半个阶段', onClick: () => control('stop') }, '⏸'),
-                      h('button', { className: 'agl-icon', title: '立即终止：杀掉进程树，任务标记为已停止', onClick: () => control('stop-now') }, '⏹'),
+                      h('button', { className: 'agl-icon', disabled: !taskReady, title: '阶段末停止：当前阶段跑完后停下，不留半个阶段', onClick: () => control('stop') }, '⏸'),
+                      h('button', { className: 'agl-icon', disabled: !taskReady, title: '立即终止：杀掉进程树，任务标记为已停止', onClick: () => control('stop-now') }, '⏹'),
                       h('select', {
                         className: 'agl-btn',
                         title: 'note：下一阶段提示；amendment：当前轮作废并回到 design',
@@ -651,7 +897,7 @@ window.__ModuleLoader__.load({
                         onChange: (e) => setInjectText(e.target.value),
                         onKeyDown: (e) => { if (e.key === 'Enter') control('inject', injectText, injectKind) },
                       }),
-                      h('button', { className: 'agl-icon', title: '提交输入', disabled: !injectText.trim(), onClick: () => control('inject', injectText, injectKind) }, '⏎'),
+                      h('button', { className: 'agl-icon', title: '提交输入', disabled: !taskReady || !injectText.trim(), onClick: () => control('inject', injectText, injectKind) }, '⏎'),
                     ),
                     (detail.attention && detail.attention.question) ? h('div', {
                       style: { marginTop: '8px', padding: '8px 10px', borderRadius: '10px', border: '1px solid rgba(224,168,62,.45)', background: 'rgba(224,168,62,.08)' },
@@ -666,9 +912,19 @@ window.__ModuleLoader__.load({
                           onChange: (e) => setAnswerText(e.target.value),
                           onKeyDown: (e) => { if (e.key === 'Enter') control('answer', answerText) },
                         }),
-                        h('button', { className: 'agl-btn', disabled: !answerText.trim(), onClick: () => control('answer', answerText) }, '回答'),
+                        h('button', { className: 'agl-btn', disabled: !taskReady || !answerText.trim(), onClick: () => control('answer', answerText) }, '回答'),
                       ),
                     ) : null,
+                    h('div', { className: 'agl-fine', style: { marginTop: '8px' } },
+                      h('div', null, '项目：' + projTitle(project)),
+                      h('div', null, '来源：' + (pipeline === null ? '读取中…' : !pipeline.ok ? '读取失败：' + pipeline.error : (SOURCE_TEXT[srcOf(detail.task)] || '旧任务：无来源记录'))),
+                      (() => {
+                        const run = (detail.runs || []).slice(-1)[0]
+                        if (!run || !(run.model_requested || run.model_resolved || run.provider)) return null
+                        const models = [run.model_requested, run.model_resolved].filter(Boolean).join(' → ')
+                        return h('div', null, '模型：' + [models, run.provider].filter(Boolean).join(' · '))
+                      })(),
+                      h('div', null, 'T gate：未实现（核心尚未产出 T gate 记录）')),
                     detail.state ? h('div', { className: 'agl-fine', style: { marginTop: '8px' } },
                       'model ' + (detail.state.model || '—') + ' · effort ' + (detail.state.effort || '—') +
                       ' · switches ' + (detail.state.switches ?? 0) +
@@ -706,8 +962,10 @@ window.__ModuleLoader__.load({
                         className: 'agl-btn',
                         onClick: () => {
                           const next = logMode === 'raw' ? 'readable' : 'raw'
+                          begin('detail')
+                          view.current.mode = next
+                          setDetail(null); setMergeAsk(false)
                           setLogMode(next)
-                          loadDetail(current, project, next)
                         },
                       }, logMode === 'raw' ? '原始 JSON' : '可读视图'),
                       h('span', { className: 'agl-fine' }, '自动刷新 5s' + (logMode === 'raw' ? ' · 最后 200 行' : '')),
@@ -717,6 +975,16 @@ window.__ModuleLoader__.load({
                 ),
           ),
         ),
+      )
+
+      return h('div', { className: 'agl-panel' },
+        renderTop(),
+        h('nav', { className: 'agl-tabs', 'aria-label': '驾驶舱页面' }, TABS.map(([id, title]) => h('button', {
+          key: id, className: 'agl-tab' + (tab === id ? ' on' : ''), 'aria-current': tab === id ? 'page' : undefined, onClick: () => setTab(id),
+        }, title, id === 'home' && pending > 0 ? h('span', { className: 'agl-badge' }, pending) : null))),
+        err ? h('div', { className: 'agl-empty' }, err) : null,
+        tab === 'build' ? renderBuild() : h('div', { className: 'agl-page' },
+          tab === 'home' ? renderHome() : tab === 'studio' ? renderStudio() : tab === 'blueprint' ? renderBlueprint() : renderSettings()),
       )
     }
 
