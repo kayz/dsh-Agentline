@@ -1,0 +1,60 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "9063906e9f1478b7cbcb3a4293e8a8c8ee94a08c",
+  "passed": 2,
+  "total": 5,
+  "findings": [
+    {
+      "severity": "P1",
+      "description": "???????????? Codex ??????",
+      "evidence": "orchestrator/lib/studio.mjs:150,445-465; orchestrator/config/agentline.config.json:17-25; orchestrator/lib/adapters/codex.mjs:66-75"
+    },
+    {
+      "severity": "P1",
+      "description": "G0 ?????????????????????????????",
+      "evidence": "orchestrator/lib/studio.mjs:195-218,256-268,773-780,801-820"
+    },
+    {
+      "severity": "P1",
+      "description": "????????????????????????????????",
+      "evidence": "orchestrator/lib/studio.mjs:495-512,565-569,625-672,696-719,778-782,823-825"
+    },
+    {
+      "severity": "P2",
+      "description": "??????????????UI ?????????",
+      "evidence": "orchestrator/lib/studio.mjs:195-218; plugin/lib/index.js:928-935"
+    },
+    {
+      "severity": "P2",
+      "description": "??????? JSON ?????????G0 ????????",
+      "evidence": "orchestrator/lib/studio.mjs:616-624,788-790"
+    }
+  ],
+  "results": [
+    {
+      "id": "AC-1",
+      "pass": true,
+      "evidence": "ci-results.json AC-1: exitCode 0, AC-1 OK"
+    },
+    {
+      "id": "AC-2",
+      "pass": false,
+      "evidence": "ci-results.json AC-2: exitCode 0, AC-2 OK; orchestrator/lib/studio.mjs:445-465,495-512,616-672,696-719"
+    },
+    {
+      "id": "AC-3",
+      "pass": false,
+      "evidence": "ci-results.json AC-3: exitCode 0, AC-3 OK; orchestrator/lib/studio.mjs:195-218,256-268,773-780,801-820"
+    },
+    {
+      "id": "AC-4",
+      "pass": false,
+      "evidence": "ci-results.json AC-4: exitCode 0, AC-4 OK; orchestrator/lib/studio.mjs:195-218; plugin/lib/index.js:928-935"
+    },
+    {
+      "id": "AC-5",
+      "pass": true,
+      "evidence": "ci-results.json AC-5: exitCode 0, 91 passed, 0 failed, AC-5 OK"
+    }
+  ]
+}
