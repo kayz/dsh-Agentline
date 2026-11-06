@@ -96,7 +96,7 @@ export function catalog(config) {
   return Object.entries(config.models || {}).map(([key, m]) => ({
     key,
     id: m.id,
-    backend: m.backend,
+    backend: m.backend || m.provider || null,
     pool: m.pool,
     family: m.family,
     rank: m.rank || {},
