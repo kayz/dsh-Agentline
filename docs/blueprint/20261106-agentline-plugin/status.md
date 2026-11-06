@@ -1,66 +1,65 @@
 # Blueprint 20261106 — AgentLine 插件状态
 
-状态：**Round 3 完成；Review v3 = REVISE；按协议停止，等待用户裁决**
+状态：**契约收口 v4 完成；Review v4 = REVISE；无新的用户裁决，仍有局部契约待修补**
 日期：2026-11-06
 
 ## 已完成
 
-- `brief.md`：完整 Blueprint 需求（控制面、UI/UX、slash 命令、监控、模型维护/配置、错误/轮次、gate、迁移）。
+- `brief.md`：完整 Blueprint 需求。
 - `design-v1.md`：主设计 v1（105k）。
-- `review-v1.md`：REVISE（4 blocking + 6 major）。
-- `design-v2-delta.md`：第 2 轮修订。
-- `review-v2.md`：REVISE（B1/B2/B4 部分关闭）。
-- `design-v3-delta.md`：第 3 轮修订。
-- `review-v3.md`：REVISE；协议内最后一轮，不自动开第 4 轮。
+- `design-v2-delta.md` / `review-v2.md`：第 2 轮。
+- `design-v3-delta.md` / `review-v3.md`：第 3 轮。
+- `design-v4-contract.md` / `review-v4.md`：用户 D1–D4 后的契约收口。
+- `docs/studio/20261106-agentline-plugin/decisions.md`：D1=A、D2=人工登记、D3=显式追加、D4=本机 CLI 信任。
 
-## Review v3 结论
+## Review v4 结论
 
-已实质关闭：
+已关闭：
 
-- G2 固定集成快照与证据绑定；
-- 角色锁的配置来源；
-- 补封存移出范围；
-- 兼容矩阵收口；
-- 大量 UI/UX、slash 命令、监控、模型配置、错误/gate 设计已经具体化。
+- B5 批准竞态；
+- M3/M5 原问题；
+- B4 正常合并校验循环；
+- D1 K1 授权边界、D2 人工例外、D4 本机信任落地。
 
 仍剩：
 
-### Blocking
+### B1 部分关闭
 
-1. **B1（K1 恢复契约）**：正常计轮已成立，但调用结束、归档、步骤提交、step.end 之间的崩溃窗口未闭合；中断证据可能被下一次尝试覆盖；同一 amendment 可能重复开启 epoch。
-2. **B4（合并校验循环）**：`T.reachable` 要求 `merged.json`，但合并流程要等 K 完成才写；重入判据过宽；T 缓存键未覆盖 K/可达性/批准状态。
-3. **B5（批准竞态）**：批准检查在 MainWrite 锁外，撤销批准可在检查后、合并前插入。
+1. `rebindInputs` 依赖 `HEAD:inputs.jsonl`，但 `inputs.jsonl` 按 Q6 外置/gitignore；消费后、提交前崩溃无法恢复。
+2. `call.archive` 已落盘、`call.end` 未落盘的窗口没有恢复分支。
+3. Windows 进程终止证明仍可能漏掉存活的后代进程。
 
-### Major
+### B4 部分关闭
 
-- MainWrite 目标路径已有的未跟踪文件未被统一拒绝；
-- drain 尚未覆盖旧 `cmdRun` 和“已准入未启动”的 worker；
-- amendment/epoch、步骤提交和证据归档需要统一恢复协议。
+1. K 已提交、`phase=recorded` 之前崩溃，会被误判为分歧；K 写入/暂存未提交窗口也未定义。
+2. `T_content` 缓存键没有覆盖 `check-task -Sealed` 的本机日志检查；修改本机日志后缓存仍可能命中。
 
-## 需要用户裁决
+### M4 部分关闭
 
-### D1：是否授权 K1
+旧 `executeRole` 在 adapter 调用结束到下一候选之间会短暂 `clearLive`；drain 可能误报零运行。旧 CLI 没有 admission/任务锁。
 
-v3 证明 v2 的“flow 零侵入 + CallGuard”无法兑现 Q5 的三轮/恢复承诺。K1 需要在 `flow.mjs` 增加单步入口 `runStep`，由 Supervisor 驱动循环。
+### D3 部分落地
 
-- A：授权 K1（违反 Q1 字面“flow 零侵入”，但保留 flow 的步骤实现）；
-- B：不授权，缩短/降级 Q5 的自动恢复承诺，只做外层监督；
-- C：把 Build 控制器拆成独立执行器（范围更大）。
+- 调度规则仍要求 `k < 3`；
+- G1 的不可豁免检查仍是 `rounds_le_3`；
+- 追加的第 4 轮无法通过调度和 G1。
 
-**未裁决前不能进入实现切分。**
+## 无新的用户裁决
 
-### D2：身份未验证策略与手工导入例外
+D1–D4 不需要重裁。剩余是现有授权内的局部契约修补；不需要重开架构，不需要新增产品功能。
 
-strict / 显式例外的适用阶段；任何例外都不能显示为“已验证”。
+## 是否可进入实现切分
 
-### D3：三轮后人工追加
+**no。**
 
-未裁决前保持三轮后停下；`accept_as_is` 已删除。
+前置条件：
 
-### D4：本机账户信任约定
+1. 关闭 B1 输入恢复、archive/end 窗口、进程终止证明；
+2. 关闭 B4 K 恢复窗口与 T 缓存边界；
+3. 修正旧 CLI drain 生命周期；
+4. 同步 D3 到调度和 G1；
+5. 拼装最终设计合并稿。
 
-Host 签名只能提高伪造门槛，不能证明操作者是人；是否接受本机 CLI 作为受信任的审批入口。
+## 当前建议
 
-## 当前结论
-
-设计方向、UI/UX、slash 命令、监控、模型管理已有实质方案；但 **B1/B4/B5 是正确性问题，不能带病进入完整实现切分**。需要用户先裁 D1，并决定是否继续做局部契约收口。
+继续一次**局部契约修补**（不重开 Blueprint 范式，不新增用户决策），只修上述四项，再复核。现有 UI/UX、slash 命令、监控、模型配置、控制面架构可以保留。
