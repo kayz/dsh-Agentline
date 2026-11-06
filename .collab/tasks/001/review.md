@@ -2,39 +2,50 @@
 
 ## 结论
 
-needs_revision。独立核对通过 **9/12**：AC-6 不满足设计的失败状态要求；AC-9、AC-12 各缺少一段必需命令的 CI 运行证据，无法确认完整通过。
+needs_revision；独立评审通过 **13/14**。AC-6 不通过，其余验收项通过。编排方本轮 CI 的 14 项命令均退出 0；静态文案检查未覆盖下述错误状态被项目轮询清除的行为。
 
-被评审工作区 HEAD：`918a770cae725a3bcd6f00d856d94fdf8c3a4c1a`。通过只读读取工作区 `.git`、`C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1` 与 `C:/git/dsh-Agentline/.git/refs/heads/task/001:1` 确认；未执行 git 命令。检查对象为此 HEAD 下当前工作区文件，产品文件 SHA256：
-- `plugin/lib/client.js`：`53e7a644ba15f9e9f61c6a02645bee71007a6b1f80ab71ae564d4eb0b29b3618`
+验证的 git SHA：`e83e074d92a6357375064a73795c735b568e07e5`。只读 `.git:1` → `C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1` → `C:/git/dsh-Agentline/.git/refs/heads/task/001:1`，解压对应 loose commit object 并计算 SHA1，与该 SHA 一致；两个产品文件统一 CRLF/LF 后与该提交的 blob 一致。未执行 git 命令。
+
+执行类验收采用 `.collab/tasks/001/ci-results.json:4` 的 `2026-11-06T18:21:57.0922218+08:00` 运行证据，未重跑验收命令。AC-9 首段与 AC-13 命令相同，其运行证据共用；AC-12 和 AC-14 现已分别包含正确输出，不再沿用历史报告中的证据缺失结论。
+
+本轮只读计算的 SHA256：
+
+- `plugin/lib/client.js`：`527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a`
 - `plugin/lib/index.js`：`6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157`
+- `.collab/tasks/001/ci-results.json`：`1fa3e78dde631e3d30349066c84a039130a60434359c9cb0fc891676f3eb711f`
 
-采用编排方 `ci-results.json`（2026-11-06T16:34:16.7917509+08:00）的执行证据，不重跑验收，不以评审环境限制判失败。CI 自报 12/12；以下结合代码与实际覆盖范围独立判断。CI 文件 SHA256：`bbda6fecf33bfa71857c1d8bdbaf648674ec06a7d6bef8c4e231dfdb1a64c9fb`。
+本轮仅更新 review.md、verdict.json，保留其他轮次文件。brief 未指定额外验收报告路径。未在 DSH 中执行人工观察；按 acceptance.md:351 的约定，不计为自动验收失败。未因评审环境或临时权限限制扣分。仓库未发现 scripts/check-fast.ps1。
 
 ## 逐条 AC 结果
 
-下表 CI 行号均相对于本目录 `ci-results.json`；产品路径相对于仓库根。
+以下 CI 行号均指 `.collab/tasks/001/ci-results.json`，产品代码路径为 `plugin/lib/`。
 
 | AC | 结果 | 退出码 | 原始输出位置 / 说明 |
 |---|---|---|---|
-| AC-1 | 通过 | 0 | CI:10–16，client.js 语法检查，无输出。 |
-| AC-2 | 通过 | 0 | CI:19–25，index.js 语法检查，无输出。 |
-| AC-3 | 通过 | 0 | CI:28–34，`OK tabs+home`；client.js:61–74 页签滚动与响应式布局，108–119 页签及命令，455–570 数据读取、轮询与持久化，617–665 首页，980–987 页面分派。 |
-| AC-4 | 通过 | 0 | CI:37–43，`OK legacy ops`；client.js:318–385 合并/控制/恢复请求及反馈隔离，800–974 列表、阶段、ledger、回答、执行记录和日志，163–232 设置页，1000 起 focusTask/HeaderChips。278–316、483–587 核对项目/任务/日志请求隔离及清理；合并仍需二次确认，grant 限低档。 |
-| AC-5 | 通过 | 0 | CI:46–52，`OK no mock data`；client.js:669–703 只读投影会话与目录，918–927 模型字段缺失时省略、T gate 明示未实现，没有从评审状态推断 gate。 |
-| AC-6 | 不通过 | 0（静态） | CI:55–61，`OK empty states` 只证明文案存在；client.js:252–257、455–460、519–520、671、747 与 design.md:279 矛盾，详见问题清单。 |
-| AC-7 | 通过 | 0 | CI:64–70，`OK settings+slash`；client.js:110–117、661–665 仅复制已支持命令；744–797 路由/矩阵迁入设置，688–703 目录/Provider 同步错误状态、并集及原始 availability 计数。首次项目读取失败的路由加载问题计入 AC-6，不重复扣项。 |
-| AC-8 | 通过 | 0 | CI:73–79，`OK host routes 14`；index.js:550–852 旧十二个路由，855–874 新只读路由，857、868 非 GET 返回 405；catalog 将原始发现缓存传给 buildCatalog，只返回目录和 discovery 概况。 |
-| AC-9 | 无法确认完整通过 | 0（第二段） | CI:82–88 仅有 `OK data projection+navigation`，可采信空/有会话/失败、Provider 投影及跨项目导航；缺 acceptance.md:80–83 要求的 `OK render 5 tabs` 运行证据。ci-runner.ps1:45、54、60 解释了第一段被覆盖。 |
-| AC-10 | 通过 | 0 | CI:91–97，`OK host routes runtime`；对应 acceptance.md 的隔离目录快照、空/有会话、目录、写方法 405、旧 projects 断言。index.js:855–874 与该证据一致。 |
-| AC-11 | 通过 | 0 | CI:100–106，输出汇总 `# tests 71`、`# pass 64`、`# fail 0`、`# skipped 7`。 |
-| AC-12 | 无法确认完整通过 | 0（第一段） | CI:109–115 仅有 `OK write scope`，采信相对指定基准的范围检查；design.md:1–5 write_scope 仍仅两个产品文件。缺 acceptance.md:327–334 的 `OK no untracked files` 运行证据；ci-runner.ps1:60、65 在文件末尾保留首段命令，未执行第二段。 |
+| AC-1 | 通过 | 0 | CI:10–16，output 为空，符合 client.js 语法检查期望。 |
+| AC-2 | 通过 | 0 | CI:19–25，output 为空，符合 index.js 语法检查期望。 |
+| AC-3 | 通过 | 0 | CI:28–34，`OK tabs+home`；client.js:61–74、108–119、532–609、630–680、994–1002 核对滚动页签、首页区块、端点、持久化和页面分派。 |
+| AC-4 | 通过 | 0 | CI:37–43，`OK legacy ops`；client.js:318–385 保留任务操作端点与请求体，814–988 保留列表、阶段轨迹、ledger、停止、输入、回答、合并确认、执行记录和日志；272–316、496–539、571–609 核对任务/项目/日志请求隔离、写操作反馈保护及卸载清理。只读对照基准 blob，SettingsPage/SettingsSection、SafeBoundary、focusTask、HeaderChips、apply 的既有实现未变。 |
+| AC-5 | 通过 | 0 | CI:46–52，`OK no mock data`；client.js:683–718 按真实会话/目录投影，932–941 只展示存在的模型字段，G1/T gate 明示未实现，不从任务状态推导 gate 通过。 |
+| AC-6 | 不通过 | 0（静态命令） | CI:55–61，`OK empty states`；但 client.js:471–473 会清除独立路由错误，且不重试路由，761 随后持续显示“读取中…”，违反 design.md:279。详见问题清单。 |
+| AC-7 | 通过 | 0 | CI:64–70，`OK settings+slash`；client.js:675–679 命令仅复制或标为未实现，758–812 路由/矩阵迁入设置，702–718 只读目录与 Provider 共用加载/错误状态、取 Provider 并集并按 availability 计数。路由错误展示问题归入 AC-6。 |
+| AC-8 | 通过 | 0 | CI:73–79，`OK host routes 14`；index.js:550–852 旧路由、855–874 两条新只读路由，857、868 拒绝非 GET，872–873 使用原始发现缓存构造目录，仅返回目录和 discovery 概况。只读对照基准 blob，排除新路由及路由注释后，Host 非空行完全一致。 |
+| AC-9 | 通过 | 0 | CI:91–97，`OK data projection+navigation`；首段同 AC-13，CI:82–88 的 `OK render 5 tabs` 补足证据。client.js:307–315、602–609、683–718、994–1002 与默认首页、数据投影、项目切换及跨项目回答导航断言一致。 |
+| AC-10 | 通过 | 0 | CI:100–106，`OK host routes runtime`；原断言覆盖空/已有会话、模型目录、四种非 GET 方法 405、旧 projects 路由及隔离目录内容不变。index.js:855–874 为既有模块的只读转发，与结果一致。 |
+| AC-11 | 通过 | 0 | CI:109–115，输出 `# tests 71`、`# pass 71`、`# fail 0`、`# skipped 0`。 |
+| AC-12 | 通过 | 0 | CI:118–124，`OK write scope`；依据 acceptance.md:323–334 的原命令，相对指定基准检查预期路径 client.js、index.js、.gitignore；不沿用旧报告中缺少第一段证据的结论。 |
+| AC-13 | 通过 | 0 | CI:82–88，`OK render 5 tabs`；client.js:254 默认首页、994–1002 五页分派，与首段渲染命令一致。 |
+| AC-14 | 通过 | 0 | CI:127–133，`OK no untracked files`；对应 acceptance.md:339–345 的独立未跟踪文件检查。 |
 
 ## 问题清单
 
-1. **P2 — AC-6：首次项目读取失败导致依赖页面永久显示加载中。** 首次挂载时 project、pipeline、routing 均为空（client.js:252–257）；让 /agentline/projects 网络失败、非 JSON 或返回 ok:false，loadProjects 在 459–460 仅记录 projects 错误并返回。loadPipeline（519–520）和 loadRouting（422–423）均因无 project 返回，Studio/Blueprint（671）与设置页项目路由（747）仍显示“读取中…”，这些区块看不到项目错误。挂载只调一次 loadProjects（558–564），重新进入 Studio/Blueprint 也不重试，设置页再次进入仍因无 project 提前返回。因此首次失败后，即使网络恢复也不会经这些页面或现有轮询恢复，必须手动刷新。design.md:279 明确禁止失败伪装成无限加载，并要求轮询或重新进入页面可恢复。修复应传播项目读取的加载/失败状态到依赖区块，并提供重新进入页面或轮询恢复路径；不要把未选定项目伪装成空会话。
+1. **P2 / AC-6：项目列表轮询成功会掩盖路由读取失败，使设置页持续加载。** 设置页进入时 `loadRouting` 请求失败会设置 `sourceErrors.routing`，并将 routing 清为 null（client.js:422–428）。随后独立的 `/agentline/projects` 请求成功，无条件清除 `sourceErrors.routing`（471–473），但没有调用 loadRouting。项目列表每 10 秒轮询（575）；当前项目未变时不会触发 `[tab, project]` 的设置页 effect（581–583）。设置页最终呈现 routing=null、错误为空，761 只能显示“读取中…”，后续项目列表轮询仍不重试路由。即使路由端点一直失败，其真实错误也会被正常的项目列表请求隐藏。这违反 design.md:279 要求的错误隔离和失败不得伪装成无限加载。
 
-2. **P2 — AC-9：五页渲染与默认首页的运行证据缺失。** acceptance.md:75–85 的首段与随后快照交互段都必须执行，但 CI:82–88 只有第二段输出。只读核对 ci-runner.ps1:45、54、60：第二个 fence 重置缓冲，遇到 AC-10 标题时将当前 Command 覆盖为最后一个 fence，所以当前 12/12 汇总不能证明首段执行。请编排方补执行原首段并留存退出码和 `OK render 5 tabs`；保留现有第二段证据，不修改验收断言。
+   只读内存复现直接提取当前 client.js 的 loadRouting/loadProjects 函数，替换网络和 setter，不创建夹具、不执行 effect 或定时器。先令路由返回 `{ok:false,error:'routing-unavailable'}`，再令 projects 返回成功且包含同一项目，输出：
 
-3. **P2 — AC-12：未跟踪文件检查的运行证据缺失。** acceptance.md:327–334 明确要求第二段；CI:109–115 仅有首段输出 `OK write scope`。ci-runner.ps1:60 首段已设置 Command，65 在文件结束仅于 Command 为空时赋值，因此末项第二段被忽略。范围 diff 不能证明没有未跟踪文件。请编排方补执行原第二段并留存退出码和 `OK no untracked files`；review 按授权不执行 git，不修改验收或执行器。
+   ```text
+   after routing failure: routing=null, error=routing-unavailable
+   after projects success: routing=null, error=""; no routing retry
+   ```
 
-本轮仅创建 review.md、verdict.json。brief 未指定另行追加的验收报告路径；未修改任何历史文档。未执行 DSH 人工观察，不把静态代码检查表述为浏览器交互验证；acceptance.md 将该观察列为非自动判定项。仓库不存在 scripts/check-fast.ps1。
+   请由路由数据源自己的成功响应清除路由错误；项目列表成功时仅清除属于项目列表的错误。如需传播、撤销上游项目错误，应区分其来源，并在撤销时实际重试当前项目路由，避免留下没有在途请求的加载状态。无需扩展 Host 接口或修改验收断言。
