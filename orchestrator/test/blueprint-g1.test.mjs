@@ -204,6 +204,16 @@ function refresh(repo, id) {
 
 function graphFile(repo, id) { return path.join(sessionDir(repo, id), 'task-graph.json') }
 
+function writeWaiver(repo, id, checkId, contentHash) {
+  writeJson(path.join(sessionDir(repo, id), 'waivers.json'), [{
+    check: checkId,
+    by: 'user',
+    at: '2026-11-07T00:00:00.000Z',
+    reason: '尝试豁免',
+    content_hash: contentHash,
+  }])
+}
+
 test('blueprint g1: each check is judged from disk', async (t) => {
   const ctx = setup()
   t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
@@ -428,6 +438,58 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     assert.equal(check(g, 'G1.review_pass').pass, true)
   })
 
+  await t.test('a task without a title fails task fields after digests are refreshed', () => {
+    const id = branch(ctx.repo, 'base', 'notitle')
+    const graph = readJson(graphFile(ctx.repo, id))
+    delete graph.tasks[0].title
+    graph.tasks[1].title = '   '
+    writeJson(graphFile(ctx.repo, id), graph)
+    fs.writeFileSync(path.join(sessionDir(ctx.repo, id), 'acceptance-matrix.md'), renderAcceptanceMatrix(graph), 'utf8')
+    refresh(ctx.repo, id)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.task_fields_complete').pass, false)
+    assert.match(check(g, 'G1.task_fields_complete').evidence, /T-001\.title/)
+    assert.match(check(g, 'G1.task_fields_complete').evidence, /T-002\.title/)
+    assert.equal(check(g, 'G1.graph_schema').pass, true)
+    assert.equal(check(g, 'G1.ac_bidirectional').pass, true)
+    assert.equal(check(g, 'G1.matrix_consistent').pass, true)
+    assert.equal(check(g, 'G1.review_pass').pass, true)
+    assert.equal(g.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '无标题也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.task_fields_complete|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+  })
+
+  await t.test('an empty task graph fails schema, fields, coverage and the matrix', () => {
+    const id = branch(ctx.repo, 'base', 'empty')
+    const graph = readJson(graphFile(ctx.repo, id))
+    graph.tasks = []
+    graph.acceptance = []
+    writeJson(graphFile(ctx.repo, id), graph)
+    fs.writeFileSync(path.join(sessionDir(ctx.repo, id), 'acceptance-matrix.md'), renderAcceptanceMatrix(graph), 'utf8')
+    refresh(ctx.repo, id)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.graph_schema').pass, false)
+    assert.match(check(g, 'G1.graph_schema').evidence, /tasks:empty/)
+    assert.match(check(g, 'G1.graph_schema').evidence, /acceptance:empty/)
+    assert.equal(check(g, 'G1.task_fields_complete').pass, false)
+    assert.match(check(g, 'G1.task_fields_complete').evidence, /tasks:empty/)
+    assert.equal(check(g, 'G1.ac_bidirectional').pass, false)
+    assert.match(check(g, 'G1.ac_bidirectional').evidence, /acceptance:empty|tasks:empty/)
+    assert.equal(check(g, 'G1.matrix_consistent').pass, false)
+    assert.match(check(g, 'G1.matrix_consistent').evidence, /matrix:empty/)
+    assert.equal(check(g, 'G1.review_pass').pass, true)
+    assert.equal(g.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '空图也批准'])
+    assert.notEqual(approved.status, 0)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+  })
+
   await t.test('a stored studio hash that is not the current G0 fails studio_link only', () => {
     const id = branch(ctx.repo, 'base', 'link')
     const statePath = path.join(sessionDir(ctx.repo, id), 'state.json')
@@ -436,18 +498,70 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     writeJson(statePath, state)
     const g = evaluateG1(ctx.repo, id)
     assert.equal(check(g, 'G1.studio_link').pass, false)
-    assert.equal(check(g, 'G1.studio_link').waivable, true)
+    assert.equal(check(g, 'G1.studio_link').waivable, false)
     assert.equal(check(g, 'G1.review_pass').pass, true)
     assert.equal(g.pass, false)
+    assert.equal(g.checks_pass, false)
+    assert.equal(g.approval_valid, false)
+    writeWaiver(ctx.repo, id, 'G1.studio_link', g.content_hash)
+    const waived = evaluateG1(ctx.repo, id)
+    assert.equal(check(waived, 'G1.studio_link').pass, false)
+    assert.equal(waived.pass, false)
+    assert.equal(waived.checks_pass, false)
+    assert.equal((waived.waived || []).includes('G1.studio_link'), false)
+    assert.equal((waived.failed || []).includes('G1.studio_link'), true)
+    const approved = ctx.run(['approve', '--id', id, '--text', '豁免后来源仍批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.studio_link|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+  })
+
+  await t.test('a failed source G0 cannot be waived after digests are refreshed', () => {
+    const id = branch(ctx.repo, 'base', 'g0fail')
+    const minutesPath = path.join(ctx.repo, '.collab', 'studio', 'src', 'minutes-final.md')
+    const original = fs.readFileSync(minutesPath, 'utf8')
+    try {
+      fs.appendFileSync(minutesPath, '\n来源纪要已改。\n')
+      refresh(ctx.repo, id)
+      const g = evaluateG1(ctx.repo, id)
+      assert.equal(check(g, 'G1.studio_link').pass, false)
+      assert.equal(check(g, 'G1.studio_link').waivable, false)
+      assert.equal(check(g, 'G1.review_pass').pass, true)
+      assert.equal(g.approval_valid, false)
+      writeWaiver(ctx.repo, id, 'G1.studio_link', g.content_hash)
+      const waived = evaluateG1(ctx.repo, id)
+      assert.equal(waived.pass, false)
+      assert.equal(waived.checks_pass, false)
+      assert.equal((waived.failed || []).includes('G1.studio_link'), true)
+      const approved = ctx.run(['approve', '--id', id, '--text', '来源坏了也批准'])
+      assert.notEqual(approved.status, 0)
+      assert.match(approved.stderr, /G1\.studio_link|not ready/)
+      const mat = ctx.run(['materialize', '--id', id])
+      assert.notEqual(mat.status, 0)
+      assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+    } finally {
+      fs.writeFileSync(minutesPath, original)
+    }
   })
 
   await t.test('a blueprint with no studio source cannot pass studio_link', () => {
     drive(ctx, 'solo')
     const g = evaluateG1(ctx.repo, 'solo')
     assert.equal(check(g, 'G1.studio_link').pass, false)
+    assert.equal(check(g, 'G1.studio_link').waivable, false)
     assert.equal(check(g, 'G1.graph_schema').pass, true)
     assert.equal(check(g, 'G1.identity_verified').pass, true)
     assert.equal(g.pass, false)
+    assert.equal(g.checks_pass, false)
+    writeWaiver(ctx.repo, 'solo', 'G1.studio_link', g.content_hash)
+    const waived = evaluateG1(ctx.repo, 'solo')
+    assert.equal(waived.pass, false)
+    assert.equal(waived.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', 'solo', '--text', '没有来源也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.studio_link|not ready/)
   })
 
   await t.test('changing locked evidence invalidates the approval without failing the checks', () => {

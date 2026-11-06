@@ -156,11 +156,23 @@ export function currentDigests(repo, id) {
   return digestSet(r.dir, r.session, repo)
 }
 
+function sourceBindingText(session) {
+  const from = session && session.from
+  if (!isObject(from) || from.kind !== 'studio') return canonicalJson(null)
+  return canonicalJson({
+    kind: 'studio',
+    id: typeof from.id === 'string' ? from.id : '',
+    gate_hash: typeof from.gate_hash === 'string' ? from.gate_hash : '',
+  })
+}
+
 function contentEntries(dir, session, repo) {
   const entries = CONTENT_FILES.map((name) => ({ path: name, text: readFileText(dir, name) }))
   const last = lastReviewMeta(dir)
   if (last) entries.push({ path: last.name, text: readFileText(dir, last.name) })
   const g0 = g0Now(repo, session)
+  // 来源绑定和当前 G0 哈希都进入内容集合：来源失效即批准哈希失效。
+  entries.push({ path: 'source/from.json', text: sourceBindingText(session) })
   entries.push({ path: 'source/g0.content_hash', text: g0.content_hash || '' })
   return entries
 }
@@ -990,6 +1002,16 @@ function graphProblems(graph) {
     problems.coverage.push('graph')
     return problems
   }
+  // 空数组不能靠“每条都满足”空过。落盘重读必须拒绝空任务和空验收。
+  if (graph.acceptance.length === 0) {
+    problems.schema.push('acceptance:empty')
+    problems.coverage.push('acceptance:empty')
+  }
+  if (graph.tasks.length === 0) {
+    problems.schema.push('tasks:empty')
+    problems.fields.push('tasks:empty')
+    problems.coverage.push('tasks:empty')
+  }
   const acIds = []
   for (const ac of graph.acceptance) {
     if (!isObject(ac) || typeof ac.id !== 'string' || !AC_ID_RE.test(ac.id) || !String(ac.text || '').trim() || !Array.isArray(ac.levels) || !ac.levels.length) {
@@ -1006,6 +1028,8 @@ function graphProblems(graph) {
       continue
     }
     taskIds.push(t.id)
+    const title = typeof t.title === 'string' ? t.title.trim() : ''
+    if (!title) problems.fields.push(`${t.id}.title`)
     const need = ['inputs', 'outputs', 'write_scope', 'acceptance_direction', 'test_levels']
     for (const k of need) {
       const list = stringList(t[k], { allowEmpty: false })
@@ -1054,7 +1078,9 @@ function graphProblems(graph) {
 }
 
 function matrixProblems(graph, matrixText) {
-  if (!isObject(graph) || !Array.isArray(graph.acceptance)) return ['matrix:no-graph']
+  if (!isObject(graph) || !Array.isArray(graph.acceptance) || !Array.isArray(graph.tasks)) return ['matrix:no-graph']
+  // 没有 AC 行时，空矩阵和空任务图会逐行比较通过。这不是一致的验收矩阵。
+  if (graph.acceptance.length === 0) return ['matrix:empty']
   const parsed = parseMatrix(matrixText)
   const expected = matrixModel(graph)
   if (!parsed || !expected) return ['matrix:unreadable']
@@ -1158,7 +1184,6 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
   const contentHash = hashEntries(contentEntries(dir, session, repo))
   const approval = latestApproval(r.approvals)
   const approvalValid = !!(approval && approval.content_hash === contentHash && !approval.revoked_at)
-  const waivers = waiversFor(dir, contentHash)
 
   let reviewEvidence = 'missing'
   if (!last) reviewEvidence = 'missing'
@@ -1168,11 +1193,11 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
   else reviewEvidence = 'pass'
 
   const checks = [
-    check('G1.studio_link', '来源 G0 为 passed，且其 hash 等于 from.gate_hash', studioOk, true, studioOk ? from.gate_hash : (from ? `gate_hash:${from.gate_hash || 'missing'}` : 'no-source')),
+    check('G1.studio_link', '来源 G0 为 passed，且其 hash 等于 from.gate_hash', studioOk, false, studioOk ? from.gate_hash : (from ? `gate_hash:${from.gate_hash || 'missing'}` : 'no-source')),
     check('G1.graph_schema', '任务图符合 agentline.taskgraph/v1，且 ID 唯一', gp.schema.length === 0, false, gp.schema.join(',') || 'ok'),
     check('G1.graph_acyclic', '依赖无环，且任务、AC、里程碑引用都存在', gp.acyclic.length === 0 && gp.schema.length === 0, false, gp.acyclic.join(',') || 'ok'),
     check('G1.ac_bidirectional', '每个 AC 至少映射到 1 个任务，每个任务至少有 1 个 AC', gp.coverage.length === 0 && gp.schema.length === 0, false, gp.coverage.join(',') || 'ok'),
-    check('G1.task_fields_complete', '每个任务都有 inputs、outputs、write_scope、depends_on、acceptance_direction、test_levels', gp.fields.length === 0, false, gp.fields.join(',') || 'ok'),
+    check('G1.task_fields_complete', '每个任务都有 title、inputs、outputs、write_scope、depends_on、acceptance_direction、test_levels', gp.fields.length === 0, false, gp.fields.join(',') || 'ok'),
     check('G1.matrix_consistent', '验收矩阵中的 AC 与测试层级和任务图一致', matrixBad.length === 0, false, matrixBad.join(',') || 'ok'),
     check('G1.review_pass', '最后一轮 verdict 为 pass，没有未解决的 blocking finding，且 input_digests 等于当前值', reviewOk, false, reviewEvidence),
     check('G1.rounds_within_limit', '业务轮次 ≤ 3', roundsOk, false, `round=${session.round && session.round.current};reviews=${reviewRounds.join(',') || 'none'}`),
@@ -1185,6 +1210,12 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
     check('G1.readonly_ok', '已完成的步骤都在强制只读模式下执行', readonlyBad.length === 0, false, readonlyBad.join(',') || 'readonly'),
     check('G1.write_scope_overlap', 'write_scope 重叠只报告，不单独否决', true, false, scopeOverlap(graph)),
   ]
+
+  // 只有标记为可豁免的检查才能进入 gate。来源 G0、只读和其余硬检查不能靠 waiver 通过。
+  const waivers = waiversFor(dir, contentHash).filter((w) => {
+    const target = checks.find((c) => c.id === w.check)
+    return !!(target && target.waivable === true)
+  })
 
   const gate = {
     schema: GATE_SCHEMA,
@@ -1200,13 +1231,15 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
     },
   }
   const result = evaluateGate(gate, { currentHash: contentHash })
-  const checksPass = result.failed.length === 0 && result.errors.length === 0 && result.status !== 'fail' && result.status !== 'not_evaluated' && result.status !== 'stale'
+  const hardOpen = checks.filter((c) => c.waivable !== true && c.pass !== true).map((c) => c.id)
+  const failed = [...new Set([...(result.failed || []), ...hardOpen])]
+  const checksPass = hardOpen.length === 0 && result.failed.length === 0 && result.errors.length === 0 && result.status !== 'fail' && result.status !== 'not_evaluated' && result.status !== 'stale'
   return {
     gate: 'G1',
-    status: result.status,
-    pass: result.pass,
-    checks_pass: checksPass || (result.status === 'pending_approval'),
-    failed: result.failed,
+    status: hardOpen.length ? 'fail' : result.status,
+    pass: result.pass === true && hardOpen.length === 0,
+    checks_pass: hardOpen.length === 0 && (checksPass || result.status === 'pending_approval'),
+    failed,
     waived: result.waived,
     checks,
     content_hash: contentHash,
@@ -1344,13 +1377,30 @@ function planDigest(mapping, graphDigest, approvalId) {
   return sha256Content(canonicalJson({ g1_approval_id: approvalId, graph_digest: graphDigest, tasks }))
 }
 
+function taskTitle(task) {
+  const title = task && typeof task.title === 'string' ? task.title.trim() : ''
+  if (!title) throw new BlueprintError('E_INVALID_OUTPUT', `task ${task && task.id ? task.id : '?'} is missing title`)
+  return title
+}
+
+function assertMaterializableGraph(graph) {
+  if (!isObject(graph) || graph.schema !== TASKGRAPH_SCHEMA || !Array.isArray(graph.tasks) || !Array.isArray(graph.acceptance)) {
+    throw new BlueprintError('E_INVALID_OUTPUT', 'task-graph.json is missing or not a task graph')
+  }
+  if (graph.tasks.length === 0 || graph.acceptance.length === 0) {
+    throw new BlueprintError('E_INVALID_OUTPUT', 'task-graph.json must contain tasks and acceptance')
+  }
+  for (const task of graph.tasks) taskTitle(task)
+}
+
 function renderBrief(task, taskId, depLines, acLines) {
+  const title = taskTitle(task)
   const lines = [
-    `# Task ${taskId} — ${task.title}`,
+    `# Task ${taskId} — ${title}`,
     '',
     '## 目标',
     '',
-    task.title,
+    title,
     '',
     '输出：',
     ...task.outputs.map((o) => `- ${o}`),
@@ -1398,7 +1448,7 @@ export function materializeBlueprint(repo, id, { dryRun = false, now } = {}) {
     throw new BlueprintError('E_APPROVAL_STALE', 'approval is stale for the current content hash; approve again before materialize')
   }
   const graph = r.taskGraph
-  if (!graph || !Array.isArray(graph.tasks)) throw new BlueprintError('E_INVALID_OUTPUT', 'task-graph.json is missing')
+  assertMaterializableGraph(graph)
   const ordered = topoTasks(graph.tasks)
   const digests = digestSet(r.dir, r.session, repo)
   const existing = r.materialized
