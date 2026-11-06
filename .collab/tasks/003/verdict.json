@@ -1,16 +1,36 @@
 {
-  "verdict": "needs_revision",
-  "git_sha": "5061745f4a6476c7bd7afa4ee188f3a84f3b83a1",
-  "passed": 3,
-  "total": 5,
-  "findings": [
-    {"severity":"P1","description":"决策或纪要内容改变后，G0 仍接受未绑定当前内容的旧用户与专家确认。","evidence":"orchestrator/lib/studio.mjs:900-916,1112-1124,1149-1155,1173-1198; orchestrator/test/studio-g0.test.mjs:350-365"}
-  ],
-  "results": [
-    {"id":"AC-1","pass":true,"evidence":"ci-results.json AC-1: exitCode 0, AC-1 OK"},
-    {"id":"AC-2","pass":false,"evidence":"ci-results.json AC-2: exitCode 0, AC-2 OK; orchestrator/lib/studio.mjs:900-916,1112-1124,1189-1198"},
-    {"id":"AC-3","pass":false,"evidence":"ci-results.json AC-3: exitCode 0, AC-3 OK; orchestrator/lib/studio.mjs:1149-1155,1173-1198; orchestrator/test/studio-g0.test.mjs:350-365"},
-    {"id":"AC-4","pass":true,"evidence":"ci-results.json AC-4: exitCode 0, AC-4 OK; plugin/test/studio-ui.test.mjs:482,516,600,616,731,794,835,856,927,951"},
-    {"id":"AC-5","pass":true,"evidence":"ci-results.json AC-5: exitCode 0, 109 passed, 0 failed, AC-5 OK"}
-  ]
+    "passed":  5,
+    "verdict":  "pass",
+    "findings":  [
+
+                 ],
+    "total":  5,
+    "results":  [
+                    {
+                        "evidence":  "ci-results.json AC-1: exitCode 0, AC-1 OK",
+                        "pass":  true,
+                        "id":  "AC-1"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-2: exitCode 0, 14 passed; orchestrator/test/studio-cli.test.mjs:177,218,257,315,372,507; orchestrator/lib/studio.mjs:838,1026",
+                        "pass":  true,
+                        "id":  "AC-2"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-3: exitCode 0, 24 passed; orchestrator/test/studio-g0.test.mjs:88,104,119,144,158,170,261,342,363,419,436; orchestrator/lib/studio.mjs:1150",
+                        "pass":  true,
+                        "id":  "AC-3"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-4: exitCode 0; plugin/test/studio-ui.test.mjs:482,516,600,616,731,794,835,856,927,951",
+                        "pass":  true,
+                        "id":  "AC-4"
+                    },
+                    {
+                        "evidence":  "ci-results.json AC-5: exitCode 0, 111 passed, 0 failed, AC-5 OK",
+                        "pass":  true,
+                        "id":  "AC-5"
+                    }
+                ],
+    "git_sha":  "97466dccde819324533582c2aa7587cfa65cb2fd"
 }
