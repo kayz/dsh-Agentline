@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { evaluateG0, concludeStudio, readStudio, STEPS } from '../lib/studio.mjs'
+import { evaluateG0, concludeStudio, readStudio, STEPS, decisionContentHash, confirmedEvidenceHash } from '../lib/studio.mjs'
 
 const AT = '2026-11-06T00:00:00.000Z'
 
@@ -13,7 +13,7 @@ function writeJson(file, data) {
 }
 
 function evidence() {
-  return {
+  return bindEvidence({
     session: {
       schema: 'agentline.studio/v1',
       id: 'g0',
@@ -48,7 +48,20 @@ function evidence() {
       expert_c: { expert: 'expert_c', verdict: 'accept', notes: '', model: 'top-c', at: AT },
     },
     minutes: '# 纪要\n\n范围：只做 P6。\n',
+  })
+}
+
+function bindEvidence(data) {
+  for (const d of data.decisions) {
+    if (d.confirmed_by_user && typeof d.confirmed_by_user === 'object') {
+      d.confirmed_by_user.content_hash = decisionContentHash(d)
+    }
   }
+  const subject = confirmedEvidenceHash(data.minutes, data.decisions)
+  for (const rec of Object.values(data.confirmations)) {
+    if (rec && typeof rec === 'object') rec.content_hash = subject
+  }
+  return data
 }
 
 function makeRepo(id = 'g0') {
@@ -345,6 +358,62 @@ test('g0: scribe and moderator must be known and different', (t) => {
   r = evaluateG0(missing.repo, 'missing')
   assert.equal(r.pass, false)
   assert.equal(check(r, 'G0.scribe_ne_moderator').pass, false)
+})
+
+test('g0: changed minutes or decision text invalidates the confirmations that were bound to the old content', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const data = evidence()
+  const dir = materialize(repo, 'g0', data)
+  const first = concludeStudio(repo, 'g0')
+  assert.equal(first.pass, true)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')).status, 'concluded')
+
+  const minutesFile = path.join(dir, 'minutes-final.md')
+  const decisionsFile = path.join(dir, 'decisions.json')
+  const confirmFile = path.join(dir, 'confirmations', 'expert_a.json')
+  const originalMinutes = fs.readFileSync(minutesFile, 'utf8')
+  const confirmBefore = fs.readFileSync(confirmFile, 'utf8')
+  const decisionsBefore = fs.readFileSync(decisionsFile, 'utf8')
+
+  // 纪要改成另一段非空正文，用户确认和专家确认原样保留
+  fs.writeFileSync(minutesFile, originalMinutes.replace('只做 P6', '改做 P6 和 P7'), 'utf8')
+  const minutesChanged = concludeStudio(repo, 'g0')
+  assert.equal(minutesChanged.pass, false)
+  assert.equal(check(minutesChanged, 'G0.minutes_final').pass, true, '纪要仍然非空，失败原因不是缺纪要')
+  assert.equal(check(minutesChanged, 'G0.each_decision_confirmed').pass, true, '决策正文没变，用户确认仍然对应当前决策')
+  assert.equal(check(minutesChanged, 'G0.experts_confirmed').pass, false)
+  assert.match(check(minutesChanged, 'G0.experts_confirmed').evidence, /expert_a:stale/)
+  assert.match(check(minutesChanged, 'G0.experts_confirmed').evidence, /expert_b:stale/)
+  assert.match(check(minutesChanged, 'G0.experts_confirmed').evidence, /expert_c:stale/)
+  assert.equal(fs.readFileSync(confirmFile, 'utf8'), confirmBefore, 'conclude 不改写专家确认')
+  assert.equal(fs.readFileSync(decisionsFile, 'utf8'), decisionsBefore, 'conclude 不改写用户确认')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')).status, 'awaiting_user')
+
+  // 纪要恢复后，只改决策正文，两条确认记录仍是改之前的那一份
+  fs.writeFileSync(minutesFile, originalMinutes, 'utf8')
+  const decisions = JSON.parse(decisionsBefore)
+  decisions[0] = { ...decisions[0], title: '范围已改', detail: '改做 P7' }
+  writeJson(decisionsFile, decisions)
+  const decisionChanged = concludeStudio(repo, 'g0')
+  assert.equal(decisionChanged.pass, false)
+  assert.equal(check(decisionChanged, 'G0.each_decision_confirmed').pass, false)
+  assert.match(check(decisionChanged, 'G0.each_decision_confirmed').evidence, /D-1:stale/)
+  assert.equal(check(decisionChanged, 'G0.experts_confirmed').pass, false)
+  assert.match(check(decisionChanged, 'G0.experts_confirmed').evidence, /stale/)
+  assert.equal(fs.readFileSync(confirmFile, 'utf8'), confirmBefore, '决策改文案后专家确认仍是旧记录')
+
+  // 确认记录里根本没有内容哈希：即使正文没动，也不能当成确认了当前内容
+  const unbound = evidence()
+  delete unbound.decisions[0].confirmed_by_user.content_hash
+  for (const rec of Object.values(unbound.confirmations)) delete rec.content_hash
+  materialize(repo, 'g0', unbound)
+  const missingBinding = evaluateG0(repo, 'g0')
+  assert.equal(missingBinding.pass, false)
+  assert.equal(check(missingBinding, 'G0.each_decision_confirmed').pass, false)
+  assert.match(check(missingBinding, 'G0.each_decision_confirmed').evidence, /D-1:stale/)
+  assert.equal(check(missingBinding, 'G0.experts_confirmed').pass, false)
+  assert.match(check(missingBinding, 'G0.experts_confirmed').evidence, /expert_a:stale/)
 })
 
 test('g0: evidence changes are re-evaluated instead of reusing a previous pass', (t) => {

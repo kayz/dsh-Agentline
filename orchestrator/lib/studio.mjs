@@ -8,7 +8,8 @@
  *   - `run` 每次只执行一个角色调用，落盘后返回；
  *   - 主持产生 open blocking 问题时停在 awaiting_user，`answer` 记录用户动作后才继续；
  *   - 专家确认只能来自对应专家的独立调用；
- *   - G0 每次都从落盘证据重新计算，不缓存通过结果。
+ *   - 用户确认与专家确认都绑定确认当时的决策/纪要内容；
+ *   - G0 每次都从落盘证据重新计算，内容变了不能沿用旧确认。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -457,13 +458,45 @@ export function blockingQuestions(questions, invalid = false) {
   return openBlocking(questions, invalid)
 }
 
-/** 用户动作必须带类型、内容和时间：只有类型不算确认。 */
+/**
+ * 决策里被确认的内容：编号、标题、说明、默认值。
+ * 轮次、状态和确认记录本身不计入，否则补记用户确认或累加轮次会把确认判成过期。
+ */
+function decisionSubstance(d) {
+  return {
+    id: String(d?.id || ''),
+    title: String(d?.title || ''),
+    detail: String(d?.detail || ''),
+    default: d?.default === undefined || d?.default === null ? null : String(d.default),
+  }
+}
+
+/** 用户确认所绑定的那一条决策内容。 */
+export function decisionContentHash(d) {
+  return sha256Content(JSON.stringify(decisionSubstance(d)))
+}
+
+/**
+ * 专家确认所绑定的证据：纪要正文 + 每条决策的内容。
+ * 三位专家确认的是同一份纪要和决策，所以共用这一个哈希。
+ */
+export function confirmedEvidenceHash(minutes, decisions) {
+  const body = String(minutes || '').trim()
+  const items = (Array.isArray(decisions) ? decisions : []).map(decisionSubstance)
+  return sha256Content(JSON.stringify({ minutes: body, decisions: items }))
+}
+
+/**
+ * 用户动作必须带类型、内容、时间和它所确认的决策内容哈希。
+ * 只有类型、或哈希对不上当前决策内容，都不算确认。
+ */
 function decisionAction(d) {
   const a = d && d.confirmed_by_user
   if (!a || typeof a !== 'object') return null
   if (a.kind !== 'confirm' && a.kind !== 'default') return null
   if (!String(a.text || '').trim()) return null
   if (!a.at || typeof a.at !== 'string') return null
+  if (a.content_hash !== decisionContentHash(d)) return null
   return a
 }
 
@@ -912,6 +945,8 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
       model: result.model,
       model_id: result.modelId,
       at: nowIso(),
+      // 绑到这次调用看到的纪要和决策。事后改内容不会让这条旧确认继续有效。
+      content_hash: confirmedEvidenceHash(r.minutes, r.decisions),
     }
     writeJson(path.join(dir, 'confirmations', `${providerRole}.json`), record)
     if (verdict === 'reject') {
@@ -1053,7 +1088,13 @@ export function answerStudio(repo, id, { question, decision, text, adoptDefault 
     const d = decisions[idx]
     if (decisionConfirmed(d)) throw new StudioError('E_DECISION_CLOSED', `decision ${decision} is already ${d.status}`)
     if (adoptDefault && !d.default) throw new StudioError('E_NO_DEFAULT', `decision ${decision} has no default`)
-    const action = { kind: adoptDefault ? 'default' : 'confirm', text: adoptDefault ? String(d.default) : value, at, channel }
+    const action = {
+      kind: adoptDefault ? 'default' : 'confirm',
+      text: adoptDefault ? String(d.default) : value,
+      at,
+      channel,
+      content_hash: decisionContentHash(d),
+    }
     const nextD = { ...d, status: adoptDefault ? 'default_adopted' : 'confirmed', confirmed_by_user: action }
     decisions = decisions.map((x, i) => (i === idx ? nextD : x))
     writeJson(path.join(dir, 'decisions.json'), decisions)
@@ -1109,21 +1150,40 @@ export function evaluateG0(repo, id, { now } = {}) {
     ...(r.questions || []).map((q) => ({ id: q.id || 'question', problem: roundsProblem(q) })),
     ...decisions.map((d) => ({ id: d.id || 'decision', problem: roundsProblem(d) })),
   ].filter((x) => x.problem)
+  // 专家确认绑定的是当前纪要正文和决策内容，不是"曾经确认过某份旧内容"。
+  const subjectHash = confirmedEvidenceHash(minutes, decisions)
   // 独立有效确认：必须来自该角色自己的模型，且带结论与时间；别人代写的确认不算。
   // 记录里的 expert 必须等于角色本身（缺失也不行），model 必须等于该角色被分配的模型
   // （角色没有分配模型时同样无法证明独立确认）。
+  // content_hash 必须等于当前纪要和决策：缺失或与当前内容不一致都是过期确认。
   const roleModel = (role) => session.roles?.[role]?.model || null
-  const missingConf = EXPERTS.filter((role) => {
+  const missingConf = []
+  const staleConf = []
+  const rejected = []
+  for (const role of EXPERTS) {
     const c = confirmations[role]
-    if (!c || typeof c !== 'object') return true
-    if (c.expert !== role) return true
-    if (!['accept', 'accept_with_notes'].includes(c.verdict)) return true
-    if (!c.model || !c.at) return true
     const assigned = roleModel(role)
-    if (!assigned || c.model !== assigned) return true
-    return false
-  })
-  const rejected = EXPERTS.filter((role) => confirmations[role] && confirmations[role].verdict === 'reject')
+    if (!c || typeof c !== 'object' || c.expert !== role || !c.model || !c.at || !assigned || c.model !== assigned) {
+      missingConf.push(role)
+      continue
+    }
+    if (c.verdict === 'reject') { rejected.push(role); continue }
+    if (!['accept', 'accept_with_notes'].includes(c.verdict)) { missingConf.push(role); continue }
+    if (c.content_hash !== subjectHash) { staleConf.push(role); continue }
+  }
+  const decisionEvidence = () => {
+    if (decisionsInvalid) return 'decisions.json invalid'
+    if (decisions.length === 0) return 'no decisions'
+    const pending = decisions.filter((d) => !decisionConfirmed(d)).map((d) => {
+      const a = d && d.confirmed_by_user
+      const shaped = a && typeof a === 'object'
+        && (a.kind === 'confirm' || a.kind === 'default')
+        && String(a.text || '').trim()
+        && typeof a.at === 'string' && a.at
+      return shaped ? `${d.id}:stale` : d.id
+    })
+    return pending.join(',') || 'all confirmed'
+  }
   // 比较实际模型身份（provider + id），配置键只是别名：两个键指向同一模型仍然算同一个。
   const scribeRole = session.roles?.scribe
   const moderatorRole = session.roles?.moderator
@@ -1150,9 +1210,7 @@ export function evaluateG0(repo, id, { now } = {}) {
       desc: '每个决策都有用户确认或明确采用默认的记录',
       pass: !decisionsInvalid && decisions.length > 0 && decisions.every(decisionConfirmed),
       waivable: false,
-      evidence: decisionsInvalid ? 'decisions.json invalid'
-        : decisions.length === 0 ? 'no decisions'
-          : (decisions.filter((d) => !decisionConfirmed(d)).map((d) => d.id).join(',') || 'all confirmed'),
+      evidence: decisionEvidence(),
     },
     {
       id: 'G0.no_open_blocking',
@@ -1173,9 +1231,13 @@ export function evaluateG0(repo, id, { now } = {}) {
     {
       id: 'G0.experts_confirmed',
       desc: '三位专家各有独立有效确认，且无阻塞性拒绝',
-      pass: missingConf.length === 0 && rejected.length === 0,
+      pass: missingConf.length === 0 && staleConf.length === 0 && rejected.length === 0,
       waivable: false,
-      evidence: [...missingConf.map((x) => `${x}:missing`), ...rejected.map((x) => `${x}:reject`)].join(',') || 'a/b/c accepted',
+      evidence: [
+        ...missingConf.map((x) => `${x}:missing`),
+        ...staleConf.map((x) => `${x}:stale`),
+        ...rejected.map((x) => `${x}:reject`),
+      ].join(',') || 'a/b/c accepted',
     },
     {
       id: 'G0.scribe_ne_moderator',
@@ -1186,6 +1248,8 @@ export function evaluateG0(repo, id, { now } = {}) {
     },
   ]
 
+  // 这个哈希是本次落盘文件的指纹，只作为 gate 的 subject。
+  // 确认过不过期，看的是确认记录上的 content_hash 与当前纪要、决策是否一致，而不是拿新指纹和自己比。
   const contentHash = sha256Content(evidenceContent(dir))
   const gate = {
     schema: GATE_SCHEMA,

@@ -317,6 +317,22 @@ Push-Location orchestrator; try { & npm test } finally { Pop-Location }
 - `node --test plugin/test/studio-ui.test.mjs`：10 通过，0 失败。
 - `cd orchestrator && npm test`：109 通过，0 失败。
 
+## 第七轮修订（针对 review 的 1 条 P1）
+
+| finding | 原因 | 修正 |
+|---|---|---|
+| P1 决策或纪要改文案后，G0 仍接受旧确认 | 专家确认只记角色、结论、模型和时间；用户确认只记动作类型、文本和时间。`evaluateG0` 把**当前**整包文件哈希同时当作 gate 的 subject 和 currentHash，没有和确认当时的内容比较 | 用户确认写入 `confirmed_by_user.content_hash`，绑定该条决策的编号、标题、说明、默认值。专家确认写入 `content_hash`，绑定当时的纪要正文和全部决策的这四项。G0 重新计算这两份哈希：对不上、或记录里没有哈希，`G0.each_decision_confirmed` / `G0.experts_confirmed` 失败，证据标 `stale`。`conclude` 不改写这两类确认。只改纪要时，决策正文没变，用户确认仍然有效，但专家确认失效，整体不通过 |
+
+轮次、状态和确认记录本身不进哈希。否则专家拒绝后累加轮次，或用户在专家确认之后补上决策确认，会把仍然指向同一份正文的确认全部判成过期。
+
+自测（仓库根，均退出码 0）：
+
+- `node --check`：`plugin/lib/client.js`、`plugin/lib/index.js`、`orchestrator/agentline.mjs`、`orchestrator/lib/studio.mjs`。
+- `node --test orchestrator/test/studio-g0.test.mjs`：24 通过，0 失败。纪要改成另一段非空正文后 `conclude` 失败且专家确认为 `stale`，用户确认仍对应未改的决策；只改决策标题和说明后，用户确认与专家确认都是 `stale`；去掉 `content_hash` 后即使正文没动也不能通过。确认文件和 `decisions.json` 在失败的 `conclude` 前后字节不变，已通过的会话被改回 `awaiting_user`。
+- `node --test orchestrator/test/studio-cli.test.mjs`：14 通过，0 失败。真实 CLI 跑到 `G0 PASS` 后，确认记录上的哈希等于当时落盘的纪要和决策；改纪要或改决策说明后再 `conclude` 为 `G0 FAIL`，且不改写确认文件。
+- `node --test plugin/test/studio-ui.test.mjs`：10 通过，0 失败。
+- `cd orchestrator && npm test`：111 通过，0 失败。
+
 ## 已知边界
 
 - Blueprint / Build 新控制面不在本任务范围；Blueprint 页面仍为只读"未实现"。

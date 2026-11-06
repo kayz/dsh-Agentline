@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { confirmedEvidenceHash, decisionContentHash } from '../lib/studio.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI = path.resolve(HERE, '..', 'agentline.mjs')
@@ -156,6 +157,21 @@ function setup() {
 function newSession(ctx, id) {
   const r = ctx.run(['new', '--id', id, '--title', `会话 ${id}`, '--input', '把 P6 的 Studio 控制面做出来'])
   assert.equal(r.status, 0, r.stderr || r.stdout)
+}
+
+function driveToConcluded(ctx, id) {
+  newSession(ctx, id)
+  for (let i = 0; i < 4; i++) assert.equal(ctx.run(['run', '--id', id]).status, 0)
+  const qs = JSON.parse(fs.readFileSync(path.join(ctx.dir(id), 'questions.json'), 'utf8'))
+  for (const q of qs) assert.equal(ctx.run(['answer', '--id', id, '--question', q.id, '--text', '按默认']).status, 0)
+  assert.equal(ctx.run(['run', '--id', id]).status, 0)
+  const decisions = JSON.parse(fs.readFileSync(path.join(ctx.dir(id), 'decisions.json'), 'utf8'))
+  for (const d of decisions) assert.equal(ctx.run(['answer', '--id', id, '--decision', d.id, '--text', '确认']).status, 0)
+  for (let i = 0; i < 3; i++) assert.equal(ctx.run(['run', '--id', id]).status, 0)
+  const pass = ctx.run(['conclude', '--id', id])
+  assert.equal(pass.status, 0, pass.stdout + pass.stderr)
+  assert.match(pass.stdout, /G0 PASS/)
+  return pass
 }
 
 test('studio cli: new creates a recoverable session and refuses duplicates / unsafe ids', (t) => {
@@ -351,6 +367,45 @@ test('studio cli: decisions need explicit user confirmation, experts confirm ind
   const broken = ctx.run(['conclude', '--id', 's4'])
   assert.notEqual(broken.status, 0)
   assert.match(broken.stdout, /G0\.minutes_final/)
+})
+
+test('studio cli: conclude rejects confirmations after the minutes or decision text changes', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  driveToConcluded(ctx, 's10')
+  const dir = ctx.dir('s10')
+  const minutesFile = path.join(dir, 'minutes-final.md')
+  const decisionsFile = path.join(dir, 'decisions.json')
+  const confirmFile = path.join(dir, 'confirmations', 'expert_a.json')
+  const minutes = fs.readFileSync(minutesFile, 'utf8')
+  const decisions = JSON.parse(fs.readFileSync(decisionsFile, 'utf8'))
+  const confirm = JSON.parse(fs.readFileSync(confirmFile, 'utf8'))
+  assert.equal(confirm.content_hash, confirmedEvidenceHash(minutes, decisions), '专家确认必须绑到当时的纪要和决策')
+  assert.equal(decisions[0].confirmed_by_user.content_hash, decisionContentHash(decisions[0]))
+  assert.equal(decisions[1].confirmed_by_user.content_hash, decisionContentHash(decisions[1]))
+
+  const confirmBytes = fs.readFileSync(confirmFile, 'utf8')
+  const decisionBytes = fs.readFileSync(decisionsFile, 'utf8')
+  fs.writeFileSync(minutesFile, minutes.replace('只做 P6', '改做 P6 和 P7'), 'utf8')
+  const staleMinutes = ctx.run(['conclude', '--id', 's10'])
+  assert.notEqual(staleMinutes.status, 0)
+  assert.match(staleMinutes.stdout, /G0 FAIL/)
+  assert.match(staleMinutes.stdout, /G0\.experts_confirmed/)
+  assert.match(staleMinutes.stdout, /stale/)
+  assert.equal(fs.readFileSync(confirmFile, 'utf8'), confirmBytes, '失败的 conclude 不改写专家确认')
+  assert.equal(fs.readFileSync(decisionsFile, 'utf8'), decisionBytes, '失败的 conclude 不改写用户确认')
+  assert.equal(ctx.readSession('s10').status, 'awaiting_user')
+
+  fs.writeFileSync(minutesFile, minutes, 'utf8')
+  const edited = JSON.parse(decisionBytes)
+  edited[0].detail = '改成包含 P7'
+  fs.writeFileSync(decisionsFile, JSON.stringify(edited, null, 2), 'utf8')
+  const staleDecision = ctx.run(['conclude', '--id', 's10'])
+  assert.notEqual(staleDecision.status, 0)
+  assert.match(staleDecision.stdout, /G0\.each_decision_confirmed/)
+  assert.match(staleDecision.stdout, /D-1:stale/)
+  assert.match(staleDecision.stdout, /G0\.experts_confirmed/)
+  assert.equal(fs.readFileSync(confirmFile, 'utf8'), confirmBytes, '决策改文案后仍保留原来的专家确认')
 })
 
 test('studio cli: round limit is explicit and refuses a third discussion round', (t) => {
