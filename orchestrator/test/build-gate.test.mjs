@@ -34,8 +34,7 @@ function ciCheck(repo, taskDir) {
 }
 
 function passReport(ranAt) {
-  return {
-    ranAt,
+  const report = {
     passed: 2,
     total: 2,
     ok: true,
@@ -44,6 +43,22 @@ function passReport(ranAt) {
       { id: 'AC-2', passed: true },
     ],
   }
+  if (ranAt !== undefined) report.ranAt = ranAt
+  return report
+}
+
+function writeAcceptance(taskDir, ids) {
+  const body = ids.map((id) => [
+    `## ${id} ${id}`,
+    '',
+    '```pwsh',
+    `Write-Output '${id} OK'`,
+    '```',
+    '',
+    `期望：${id} OK`,
+    '',
+  ].join('\n')).join('\n')
+  fs.writeFileSync(path.join(taskDir, 'acceptance.md'), body, 'utf8')
 }
 
 test('missing, corrupt, empty and partial CI evidence are unknown and not pass', (t) => {
@@ -78,6 +93,18 @@ test('missing, corrupt, empty and partial CI evidence are unknown and not pass',
   const noRows = ciCheck(repo, taskDir)
   assert.equal(noRows.pass, false)
   assert.match(noRows.evidence, /^unknown/)
+
+  writeAcceptance(taskDir, ['AC-1', 'AC-2', 'AC-3', 'AC-4', 'AC-5', 'AC-6', 'AC-7'])
+  writeCi(taskDir, {
+    ranAt: new Date(Date.now() + 60_000).toISOString(),
+    passed: 1,
+    total: 1,
+    ok: true,
+    results: [{ id: 'AC-1', passed: true }],
+  })
+  const subset = ciCheck(repo, taskDir)
+  assert.equal(subset.pass, false)
+  assert.equal(subset.evidence, 'unknown:partial')
   assert.equal(evaluateBuildGate(repo, taskDir).result.pass, false)
 })
 
@@ -95,10 +122,27 @@ test('explicit CI failure fails and a complete fresh report passes', (t) => {
   assert.equal(failed.pass, false)
   assert.equal(failed.evidence, 'fail')
 
+  writeAcceptance(taskDir, ['AC-1', 'AC-2'])
   writeCi(taskDir, passReport(new Date(Date.now() + 60_000).toISOString()))
   const ok = ciCheck(repo, taskDir)
   assert.equal(ok.pass, true)
   assert.equal(ok.evidence, 'pass')
+
+  writeCi(taskDir, passReport(undefined))
+  const noTime = ciCheck(repo, taskDir)
+  assert.equal(noTime.pass, false)
+  assert.equal(noTime.evidence, 'unknown:undetermined')
+
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-build-gate-nogit-'))
+  fs.mkdirSync(path.join(bare, '.git'), { recursive: true })
+  const bareTask = path.join(bare, '.collab', 'tasks', '001')
+  fs.mkdirSync(bareTask, { recursive: true })
+  t.after(() => fs.rmSync(bare, { recursive: true, force: true }))
+  writeAcceptance(bareTask, ['AC-1', 'AC-2'])
+  writeCi(bareTask, passReport(new Date(Date.now() + 60_000).toISOString()))
+  const noHead = ciCheck(bare, bareTask)
+  assert.equal(noHead.pass, false)
+  assert.equal(noHead.evidence, 'unknown:undetermined')
 })
 
 test('CI older than HEAD and a verdict that is not an ancestor are stale', (t) => {
@@ -106,6 +150,7 @@ test('CI older than HEAD and a verdict that is not an ancestor are stale', (t) =
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
   const first = git(repo, ['rev-parse', 'HEAD']).trim()
   git(repo, ['commit', '--amend', '-qm', 'rewritten'])
+  writeAcceptance(taskDir, ['AC-1', 'AC-2'])
   writeCi(taskDir, passReport('2000-01-01T00:00:00.000Z'))
   const staleCi = ciCheck(repo, taskDir)
   assert.equal(staleCi.pass, false)
@@ -143,6 +188,7 @@ test('non-waivable CI failure cannot be waived and a consistent gate can pass', 
   assert.equal(validateGate({ ...blocked.gate, waivers: [] }).ok, true)
 
   fs.rmSync(path.join(taskDir, 'waivers.json'))
+  writeAcceptance(taskDir, ['AC-1', 'AC-2'])
   writeCi(taskDir, passReport(new Date(Date.now() + 60_000).toISOString()))
   fs.writeFileSync(path.join(taskDir, 'verdict.json'), JSON.stringify({ verdict: 'pass', git_sha: head }))
   fs.writeFileSync(path.join(taskDir, 'step-ledger.jsonl'), [

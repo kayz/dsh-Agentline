@@ -212,5 +212,41 @@ test('role lock uses the locked model, keeps real identity, and retries do not s
   const gate = evaluateBuildGate(repo, taskDir, { config: cfg })
   const isolation = gate.gate.checks.find((item) => item.id === 'T.isolation')
   assert.notEqual(isolation.evidence, 'fail:mismatch')
+  assert.equal(isolation.pass, false)
   assert.equal(runs(taskDir).at(-1).model_resolved, 'model-a')
+})
+
+test('failed and infra calls without identity do not pass isolation', (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const dev = { event: 'call', role: 'dev', model_requested: 'model-a', model_resolved: 'model-a', identity_group: 'anthropic/model-a', infra: false }
+  const review = { event: 'call', role: 'review', model_requested: 'model-b', model_resolved: 'model-b', identity_group: 'openai/model-b', infra: false }
+  const write = (rows) => {
+    fs.writeFileSync(path.join(taskDir, 'step-ledger.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf8')
+  }
+  const isolation = () => evaluateBuildGate(repo, taskDir, { config: base() }).gate.checks.find((item) => item.id === 'T.isolation')
+
+  write([
+    dev,
+    { event: 'call', role: 'dev', model_requested: 'model-a', infra: true, error: 'network error' },
+    review,
+  ])
+  assert.equal(isolation().pass, false)
+  assert.equal(isolation().evidence, 'unknown:identity')
+
+  write([
+    dev,
+    { event: 'call', role: 'review', model_requested: 'model-b', infra: false, error: 'review failed' },
+    review,
+  ])
+  assert.equal(isolation().pass, false)
+  assert.equal(isolation().evidence, 'unknown:identity')
+
+  write([
+    dev,
+    { event: 'call', role: 'dev', model_requested: 'model-a', model_resolved: 'model-a', identity_group: 'anthropic/model-a', infra: true, error: 'network error' },
+    review,
+  ])
+  assert.equal(isolation().pass, true)
+  assert.equal(isolation().evidence, 'pass')
 })

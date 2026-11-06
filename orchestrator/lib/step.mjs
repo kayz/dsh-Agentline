@@ -114,6 +114,9 @@ export async function runStep({
     }
   }
   let st = readState(taskDir)
+  if (st && st.side_effects === 'unknown') {
+    return { ok: false, reason: 'side_effects_unknown', step: step || null, status: st.status || 'blocked', next: 'blocked' }
+  }
   if (st && (st.status === 'pr_open' || st.status === 'merged')) {
     return { ok: true, step: 'done', status: st.status, next: 'done' }
   }
@@ -313,6 +316,10 @@ export async function runBuild({
 
     for (let i = 0; i < maxSteps; i++) {
       const st = readState(runDir)
+      if (st?.side_effects === 'unknown') {
+        appendStepEvent(runDir, { event: 'resume.refused', task: taskId, reason: 'side_effects_unknown' })
+        return { ok: false, status: st.status || 'blocked', next: 'blocked', reason: 'side_effects_unknown', steps: completed, repo: runRepo }
+      }
       const step = nextStep(st)
       if (step === 'done') {
         return { ok: true, status: st?.status || 'done', next: 'done', steps: completed, repo: runRepo }

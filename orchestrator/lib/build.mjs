@@ -354,7 +354,53 @@ function callsFromDisk(taskDir) {
   })
 }
 
-function classifyCiValue(value) {
+const ACCEPTANCE_HEADING = /^#{2,4}\s+((?:AC-?\d+)|(?:[A-Z]{1,3}\d+)|(?:\d+(?:\.\d+)*))\b/
+
+function requiredAcceptanceIds(taskDir) {
+  const file = path.join(taskDir, 'acceptance.md')
+  if (!fs.existsSync(file)) return { ok: false, reason: 'missing' }
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch { return { ok: false, reason: 'unreadable' } }
+  const ids = []
+  let current = null
+  let inFence = false
+  let fence = []
+  const close = () => {
+    if (!current) return
+    if (!current.command && fence.length) current.command = fence.join('\n')
+    if (current.command && String(current.command).trim()) ids.push(current.id)
+    current = null
+    fence = []
+    inFence = false
+  }
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!inFence && ACCEPTANCE_HEADING.test(line)) {
+      close()
+      const id = line.match(ACCEPTANCE_HEADING)[1]
+      current = { id, command: null }
+      fence = []
+      continue
+    }
+    if (!current) continue
+    if (/^\s*```/.test(line)) {
+      if (!inFence) { inFence = true; fence = [] }
+      else {
+        inFence = false
+        if (!current.command && fence.length) current.command = fence.join('\n')
+      }
+      continue
+    }
+    if (inFence) { fence.push(line); continue }
+    if (!current.command && fence.length) current.command = fence.join('\n')
+    const cmd = line.match(/^-\s*命令:\s*`(.+)`\s*$/)
+    if (!current.command && cmd) current.command = cmd[1]
+  }
+  close()
+  if (!ids.length) return { ok: false, reason: 'empty' }
+  return { ok: true, ids }
+}
+
+function classifyCiValue(taskDir, value) {
   if (!isObject(value)) return { status: 'unknown', pass: false, evidence: 'unknown:corrupt' }
   const results = value.results
   if (!Array.isArray(results) || results.length === 0 || value.total === 0) {
@@ -371,6 +417,12 @@ function classifyCiValue(value) {
   if (value.passed !== passed || value.total !== results.length || value.ok !== true) {
     return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
   }
+  const required = requiredAcceptanceIds(taskDir)
+  if (!required.ok) return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
+  const got = results.map((row) => (isObject(row) && typeof row.id === 'string' ? row.id.trim() : ''))
+  const need = required.ids
+  const same = got.length === need.length && need.every((id) => got.includes(id)) && got.every((id) => need.includes(id))
+  if (!same) return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
   return { status: 'pass', pass: true, evidence: 'pass' }
 }
 
@@ -386,11 +438,13 @@ function headCommitMs(repo) {
 
 function ciFreshness(repo, value, classified) {
   if (!classified.pass) return classified
-  if (!isObject(value) || typeof value.ranAt !== 'string') return classified
+  if (!isObject(value) || typeof value.ranAt !== 'string' || !value.ranAt.trim()) {
+    return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
+  }
   const ran = Date.parse(value.ranAt)
   if (!Number.isFinite(ran)) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
   const headMs = headCommitMs(repo)
-  if (headMs == null) return classified
+  if (headMs == null) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
   if (headMs > ran + 1000) return { status: 'stale', pass: false, evidence: 'stale' }
   return classified
 }
@@ -412,7 +466,7 @@ function classifyCi(repo, taskDir) {
   const report = readCiReport(taskDir)
   if (report.state === 'missing') return { status: 'unknown', pass: false, evidence: 'unknown:missing' }
   if (report.state === 'corrupt') return { status: 'unknown', pass: false, evidence: 'unknown:corrupt' }
-  return ciFreshness(repo, report.value, classifyCiValue(report.value))
+  return ciFreshness(repo, report.value, classifyCiValue(taskDir, report.value))
 }
 
 function gitAncestor(repo, sha) {
@@ -485,18 +539,17 @@ function classifyIsolation(taskDir, config) {
   const problems = []
   const seen = { dev: new Set(), review: new Set() }
   for (const call of calls) {
-    if (call.model_resolved && call.source !== 'none') {
-      if (call.role === 'dev' || call.role === 'review') {
-        const group = groupOf(call, config)
-        if (!group) problems.push('unknown:identity')
-        else seen[call.role].add(group)
-      }
-      if (call.model_requested && call.model_resolved !== call.model_requested) problems.push('fail:mismatch')
-    } else if (!call.infra && !call.error) {
+    const verified = !!(call.model_resolved && call.source !== 'none')
+    if (!verified) {
       problems.push('unknown:identity')
-    } else if (call.model_resolved && call.model_requested && call.model_resolved !== call.model_requested) {
-      problems.push('fail:mismatch')
+      continue
     }
+    if (call.role === 'dev' || call.role === 'review') {
+      const group = groupOf(call, config)
+      if (!group) problems.push('unknown:identity')
+      else seen[call.role].add(group)
+    }
+    if (call.model_requested && call.model_resolved !== call.model_requested) problems.push('fail:mismatch')
   }
   if (problems.includes('fail:mismatch')) return { status: 'fail', pass: false, evidence: 'fail:mismatch' }
   if (problems.includes('unknown:identity')) return { status: 'unknown', pass: false, evidence: 'unknown:identity' }
@@ -628,13 +681,14 @@ export function readBuildTask(repo, taskId) {
     }
   }
   const origin = evaluated.origin
-  if (!origin.ok && origin.reason === 'origin_corrupt') {
+  if (!origin.ok) {
+    const corrupt = origin.reason === 'origin_corrupt' || origin.source === 'error'
     return {
       id: String(taskId),
-      state: 'error',
-      error: '来源损坏',
-      source: null,
-      test_levels: null,
+      state: corrupt ? 'error' : 'ok',
+      error: corrupt ? '来源损坏' : null,
+      source: corrupt ? null : 'blueprint',
+      test_levels: corrupt ? null : (Array.isArray(origin.levels) ? origin.levels : null),
       status: state && state.status ? state.status : null,
       model: actualModel(taskDir),
       ...countersOf(state),
@@ -652,7 +706,7 @@ export function readBuildTask(repo, taskId) {
     id: String(taskId),
     state: 'ok',
     error: null,
-    source: origin.source || 'legacy',
+    source: origin.legacy ? (origin.source || 'legacy') : 'blueprint',
     test_levels: Array.isArray(origin.levels) ? origin.levels : null,
     status: state && state.status ? state.status : null,
     model: actualModel(taskDir),

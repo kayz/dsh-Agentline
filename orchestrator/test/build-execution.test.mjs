@@ -169,3 +169,57 @@ test('task lock, missing termination proof and unknown side effects do not repla
   assert.equal(calls.length, 0)
   assert.equal(readState(sideRepo.taskDir).status, 'blocked')
 })
+
+test('unknown side effects are not retried or switched inside the current step', async (t) => {
+  const network = makeRepo()
+  t.after(() => fs.rmSync(network.repo, { recursive: true, force: true }))
+  const cfg = config()
+  cfg.policy.networkRetries = 2
+  cfg.policy.maxSwitchesPerStage = 2
+  cfg.roles.design = { candidates: ['a', 'b'], effort: 'high' }
+  const calls = []
+  const step = await runStep({
+    config: cfg, repo: network.repo, taskId: '001', step: 'design',
+    adapterFactory: () => ({
+      async run({ model }) {
+        calls.push(model)
+        return { exitCode: 1, error: 'network error', side_effects: 'unknown' }
+      },
+    }),
+    log() {}, projectCfg: {},
+  })
+  assert.equal(step.ok, false)
+  assert.deepEqual(calls, ['model-a'])
+  assert.equal(readState(network.taskDir).side_effects, 'unknown')
+  assert.notEqual(readState(network.taskDir).status, 'designed')
+  const again = await runStep({
+    config: cfg, repo: network.repo, taskId: '001', step: 'design',
+    adapterFactory: () => ({
+      async run({ model }) {
+        calls.push(model)
+        return { exitCode: 0, modelResolved: model }
+      },
+    }),
+    log() {}, projectCfg: {},
+  })
+  assert.equal(again.reason, 'side_effects_unknown')
+  assert.deepEqual(calls, ['model-a'])
+
+  const switched = makeRepo()
+  t.after(() => fs.rmSync(switched.repo, { recursive: true, force: true }))
+  const other = []
+  const bad = await runStep({
+    config: cfg, repo: switched.repo, taskId: '001', step: 'design',
+    adapterFactory: () => ({
+      async run({ model }) {
+        other.push(model)
+        return { exitCode: 1, error: 'compile failed', side_effects: 'unknown' }
+      },
+    }),
+    log() {}, projectCfg: {},
+  })
+  assert.equal(bad.ok, false)
+  assert.deepEqual(other, ['model-a'])
+  assert.equal(readState(switched.taskDir).side_effects, 'unknown')
+  assert.notEqual(readState(switched.taskDir).status, 'designed')
+})

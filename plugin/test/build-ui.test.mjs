@@ -247,7 +247,18 @@ function writeRealTasks(root) {
     tasks: [NODE],
   })
   writeJson(path.join(root, '.collab', 'blueprint', 'bp', 'materialized.json'), {
-    tasks: [{ node: 'T-001', task: '001', node_sha256: hash }],
+    tasks: [
+      { node: 'T-001', task: '001', node_sha256: hash },
+      { node: 'T-001', task: '005', node_sha256: hash },
+      { node: 'T-001', task: '006', node_sha256: hash },
+    ],
+  })
+  writeJson(path.join(root, '.collab', 'blueprint', 'bp', 'approvals.json'), {
+    schema: 'agentline.approvals/v1',
+    items: [
+      { approval_id: 'A-REV', content_hash: 'sha256:' + 'cd'.repeat(32), revoked_at: '2026-11-07T01:00:00.000Z' },
+      { approval_id: 'A-EXP', content_hash: 'sha256:' + 'ef'.repeat(32) },
+    ],
   })
   const task = path.join(root, '.collab', 'tasks', '001')
   writeJson(path.join(task, 'origin.json'), {
@@ -272,6 +283,27 @@ function writeRealTasks(root) {
   writeJson(path.join(root, '.collab', 'tasks', '003', 'state.json'), {
     id: '003', status: 'draft', history: [],
   })
+
+  const changed = path.join(root, '.collab', 'tasks', '004')
+  writeJson(path.join(changed, 'origin.json'), {
+    schema: 'agentline.origin/v1', kind: 'blueprint', blueprint: 'bp', node: 'T-001',
+    node_sha256: 'sha256:' + 'ab'.repeat(32), g1_approval_id: 'A-1', created_at: '2026-11-07T00:00:00.000Z',
+  })
+  writeJson(path.join(changed, 'state.json'), { id: '004', status: 'designed', history: [] })
+
+  const revoked = path.join(root, '.collab', 'tasks', '005')
+  writeJson(path.join(revoked, 'origin.json'), {
+    schema: 'agentline.origin/v1', kind: 'blueprint', blueprint: 'bp', node: 'T-001',
+    node_sha256: hash, g1_approval_id: 'A-REV', created_at: '2026-11-07T00:00:00.000Z',
+  })
+  writeJson(path.join(revoked, 'state.json'), { id: '005', status: 'designed', history: [] })
+
+  const expired = path.join(root, '.collab', 'tasks', '006')
+  writeJson(path.join(expired, 'origin.json'), {
+    schema: 'agentline.origin/v1', kind: 'blueprint', blueprint: 'bp', node: 'T-001',
+    node_sha256: hash, g1_approval_id: 'A-EXP', created_at: '2026-11-07T00:00:00.000Z',
+  })
+  writeJson(path.join(expired, 'state.json'), { id: '006', status: 'designed', history: [] })
 }
 
 function makeServer(forward) {
@@ -482,6 +514,12 @@ test.describe('build ui', { concurrency: 1 }, () => {
     assert.match(textOfId(root, 'build-row-002'), /旧任务/)
     assert.match(textOfId(root, 'build-row-002'), /未知/)
     assert.match(textOfId(root, 'build-row-003'), /错误/)
+    assert.match(textOfId(root, 'build-row-004'), /Blueprint/)
+    assert.doesNotMatch(textOfId(root, 'build-row-004'), /旧任务/)
+    assert.match(textOfId(root, 'build-row-005'), /Blueprint/)
+    assert.doesNotMatch(textOfId(root, 'build-row-005'), /旧任务/)
+    assert.match(textOfId(root, 'build-row-006'), /Blueprint/)
+    assert.doesNotMatch(textOfId(root, 'build-row-006'), /旧任务/)
     assert.doesNotMatch(pageText(root), /未实现/)
 
     click(root, findById(root, 'build-item-001'))
@@ -508,6 +546,24 @@ test.describe('build ui', { concurrency: 1 }, () => {
     click(root, findById(root, 'build-item-003'))
     await settle(root)
     assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
+
+    click(root, findById(root, 'build-item-004'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-source'), /来源：Blueprint/)
+    assert.doesNotMatch(textOfId(root, 'build-source'), /旧任务/)
+    assert.match(textOfId(root, 'build-check-T.origin_valid'), /失败/)
+
+    click(root, findById(root, 'build-item-005'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-source'), /来源：Blueprint/)
+    assert.doesNotMatch(textOfId(root, 'build-source'), /旧任务/)
+    assert.match(textOfId(root, 'build-check-T.origin_valid'), /过期/)
+
+    click(root, findById(root, 'build-item-006'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-source'), /来源：Blueprint/)
+    assert.doesNotMatch(textOfId(root, 'build-source'), /旧任务/)
+    assert.match(textOfId(root, 'build-check-T.origin_valid'), /过期/)
 
     click(root, findById(root, 'tab-home'))
     await settle(root)
