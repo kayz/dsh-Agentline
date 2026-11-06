@@ -1,0 +1,50 @@
+{
+    "verdict":  "needs_revision",
+    "git_sha":  "9b7d0fd6593f34db8ee886071deb6ab4cf2526b8",
+    "passed":  4,
+    "total":  7,
+    "findings":  [
+                     {
+                         "severity":  "P1",
+                         "description":  "Blueprint 已物化任务缺失 origin.json 时被视为旧任务，绕过批准和节点校验并调用模型；来源 gate 和投影也错误放行。",
+                         "evidence":  "orchestrator/lib/build.mjs:184-186,638-640,812-838; orchestrator/lib/step.mjs:106-115; orchestrator/test/build-source.test.mjs:311-330"
+                     }
+                 ],
+    "results":  [
+                    {
+                        "id":  "AC-1",
+                        "pass":  true,
+                        "evidence":  "ci-results.json AC-1: exitCode 0, lastLine AC-1 OK"
+                    },
+                    {
+                        "id":  "AC-2",
+                        "pass":  false,
+                        "evidence":  "CI exitCode 0, 4 tests pass; build.mjs:184-186 and build-source.test.mjs:311-330 show a materialized task with missing origin calls a model and advances"
+                    },
+                    {
+                        "id":  "AC-3",
+                        "pass":  true,
+                        "evidence":  "CI exitCode 0, 4 tests pass; build-execution.test.mjs:76,92,135,181"
+                    },
+                    {
+                        "id":  "AC-4",
+                        "pass":  false,
+                        "evidence":  "CI exitCode 0, 6 tests pass; build.mjs:638-640,717-727 passes origin gate for the missing materialized origin"
+                    },
+                    {
+                        "id":  "AC-5",
+                        "pass":  true,
+                        "evidence":  "CI exitCode 0, 4 tests pass; build-roles.test.mjs:63,102,128,219; step.mjs:69-97,125-147"
+                    },
+                    {
+                        "id":  "AC-6",
+                        "pass":  false,
+                        "evidence":  "CI exitCode 0, 4 tests pass; build.mjs:184-186,812-838 projects the materialized task with missing origin as legacy"
+                    },
+                    {
+                        "id":  "AC-7",
+                        "pass":  true,
+                        "evidence":  "ci-results.json AC-7 exitCode 0, orchestrator 182 pass, plugin 21 pass, lastLine AC-7 OK"
+                    }
+                ]
+}
