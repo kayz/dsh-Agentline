@@ -276,6 +276,22 @@ test('blueprint cli: six commands, safe ids, and status is read-only', (t) => {
   assert.match(corrupt.stdout + corrupt.stderr, /corrupt/)
 })
 
+test('blueprint cli: a missing blueprint root is empty, a non-directory root is an error', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  const root = path.join(ctx.repo, '.collab', 'blueprint')
+  assert.equal(fs.existsSync(root), false)
+  const empty = ctx.run(['status', '--json'])
+  assert.equal(empty.status, 0, empty.stderr)
+  assert.deepEqual(JSON.parse(empty.stdout).sessions, [])
+
+  fs.writeFileSync(root, 'not-a-directory', 'utf8')
+  const blocked = ctx.run(['status', '--json'])
+  assert.notEqual(blocked.status, 0)
+  assert.match(blocked.stderr, /is not a directory/)
+  assert.equal(fs.readFileSync(root, 'utf8'), 'not-a-directory')
+})
+
 test('blueprint cli: one step at a time, review cannot skip, failure does not advance', (t) => {
   const ctx = setup()
   t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))

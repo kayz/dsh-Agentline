@@ -504,15 +504,22 @@ test.describe('blueprint ui', { concurrency: 1 }, () => {
     assert.equal(findById(root, 'finding-F-07'), null)
   })
 
-  test('a failed list read is an error, distinct from an empty project', async (t) => {
+  test('a failed list read inside a valid project is an error, distinct from an empty project', async (t) => {
     const { home } = makeHome()
-    const project = makeProject('missing')
-    const missing = path.join(project, 'not-a-directory')
-    fs.writeFileSync(missing, 'x', 'utf8')
+    const project = makeProject('blocked')
+    const blueprintRoot = path.join(project, '.collab', 'blueprint')
+    fs.writeFileSync(blueprintRoot, 'not-a-directory', 'utf8')
     t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(project, { recursive: true, force: true }) })
-    const { forward } = await boot(home, project)
+    const { routes, forward } = await boot(home, project)
+    const listed = await callRoute(routes, '/agentline/blueprint', {
+      url: '/agentline/blueprint?project=' + encodeURIComponent(project),
+    })
+    assert.equal(listed.status, 500)
+    assert.equal(listed.body.ok, false)
+    assert.match(listed.body.error, /is not a directory/)
+    assert.doesNotMatch(listed.body.error, /project not found/)
     installFetch(makeServer(forward, {
-      projects: { ok: true, default: missing, projects: [{ title: 'missing', path: missing, enabled: true, tasks: { total: 0, active: 0, last: null } }] },
+      projects: { ok: true, default: project, projects: [{ title: 'blocked', path: project, enabled: true, tasks: { total: 0, active: 0, last: null } }] },
     }))
     const root = await mountCockpit()
     await settle(root)
@@ -520,7 +527,13 @@ test.describe('blueprint ui', { concurrency: 1 }, () => {
     await settle(root)
     assert.ok(findById(root, 'blueprint-error'))
     assert.match(textOfId(root, 'blueprint-error'), /无法读取 Blueprint 会话/)
+    assert.match(textOfId(root, 'blueprint-error'), /is not a directory/)
+    assert.doesNotMatch(textOfId(root, 'blueprint-error'), /project not found/)
     assert.ok(findById(root, 'blueprint-retry-list'))
+    assert.equal(findById(root, 'blueprint-empty'), null)
+    click(root, findById(root, 'blueprint-retry-list'))
+    await settle(root)
+    assert.ok(findById(root, 'blueprint-error'))
     assert.equal(findById(root, 'blueprint-empty'), null)
   })
 

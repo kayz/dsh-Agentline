@@ -453,8 +453,19 @@ export function readBlueprint(repo, id) {
 
 export function listSessions(repo) {
   const root = blueprintRoot(repo)
+  // 目录确实不存在才是空列表。文件占位、权限或 I/O 错误必须抛出，不能显示成「还没有会话」。
   let names = []
-  try { names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) } catch { return [] }
+  try {
+    const st = fs.statSync(root)
+    if (!st.isDirectory()) {
+      throw new BlueprintError('E_LIST', `cannot read blueprint sessions: ${root} is not a directory`)
+    }
+    names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+  } catch (e) {
+    if (e instanceof BlueprintError) throw e
+    if (e && e.code === 'ENOENT') return []
+    throw new BlueprintError('E_LIST', `cannot read blueprint sessions: ${e && e.message ? e.message : e}`)
+  }
   const out = []
   for (const id of names) {
     if (!isValidSessionId(id)) continue

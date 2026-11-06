@@ -4,16 +4,16 @@
 
 | 文件 | 变更 | 用途 |
 |---|---|---|
-| `orchestrator/lib/blueprint.mjs` | 新增，并按设计收紧 G1 与物化回滚 | Blueprint 控制面：会话落盘、单步 `design → testability → review`、G1、内容哈希、批准与物化；身份和回复只从本次 stdout 解析。三角色模型按规范身份单独比较，同一模型换渠道不能通过 |
+| `orchestrator/lib/blueprint.mjs` | 新增，并按设计收紧 G1、物化回滚与列表读取 | Blueprint 控制面：会话落盘、单步 `design → testability → review`、G1、内容哈希、批准与物化；身份和回复只从本次 stdout 解析。三角色模型按规范身份单独比较，同一模型换渠道不能通过。`.collab/blueprint` 不存在才是空列表，其它读取错误继续抛出 |
 | `orchestrator/lib/adapters/reply.mjs` | 新增 | 从 Claude、CodeBuddy、Codex、Gemini、Cursor 的 stdout 取出回复正文和实际模型 |
 | `orchestrator/lib/adapters/*.mjs` | 修改 | `run()` 返回解析后的 `text`、`stdout` 和 `modelResolved`；Gemini 不再把请求模型写进 `modelResolved` |
 | `orchestrator/test/adapter-reply.test.mjs` | 新增 | 各 CLI 协议的正例，以及缺模型、多模型、Gemini 回显都不算已验证身份 |
 | `orchestrator/agentline.mjs` | 修改 | `blueprint new\|run\|review\|approve\|materialize\|status` |
-| `orchestrator/test/blueprint-cli.test.mjs` | 新增 | 六个命令、单步顺序、失败不推进、冲突、物化保真、批准失效后重新批准；夹具 stdout 走真实解析器。回显的 `modelResolved` 不能推进，只有 stdout 里的回复和模型可以。同一模型换渠道时 `new` 失败，不创建会话，也不能批准或物化 |
+| `orchestrator/test/blueprint-cli.test.mjs` | 新增 | 六个命令、单步顺序、失败不推进、冲突、物化保真、批准失效后重新批准；夹具 stdout 走真实解析器。回显的 `modelResolved` 不能推进，只有 stdout 里的回复和模型可以。同一模型换渠道时 `new` 失败，不创建会话，也不能批准或物化。Blueprint 根目录缺失时 `status` 为空；根路径是文件时 `status` 失败且不改文件 |
 | `orchestrator/test/blueprint-g1.test.mjs` | 新增，并补反例 | G1 逐项正反例；来源豁免不能通过；无标题和空任务图不能通过；损坏的 blocker/finding 不能通过；当前轮未完成不能批准；测试架构变更后必须重新评审；数字 `text` 与 `null` 层级不能通过。驱动步骤的夹具同样只提供 CLI stdout。跨渠道同模型、通道前缀或大小写、共享 `canonical_id`、缺省 identity group 都不能通过，也不能批准或物化 |
 | `plugin/lib/index.js` | 修改 | `/agentline/blueprint`：GET 读落盘，POST 每次只转发一条 CLI |
 | `plugin/lib/client.js` | 修改 | Blueprint 页：真实轮次、角色、findings、任务图、G1、批准与物化；空、损坏和操作失败分开 |
-| `plugin/test/blueprint-ui.test.mjs` | 新增 | 真实路由上的空、真实、错误、项目切换、单次 CLI 和原有五个页 |
+| `plugin/test/blueprint-ui.test.mjs` | 新增 | 真实路由上的空、真实、错误、项目切换、单次 CLI 和原有五个页。列表读取失败用例使用有效项目，并把 `.collab/blueprint` 写成普通文件 |
 | `plugin/test/studio-ui.test.mjs` | 修改 | Blueprint 页改为断言空状态「还没有 Blueprint 会话」 |
 
 Studio、Build 和既有任务流没有改写。插件不自己写 `.collab/**`。
@@ -114,3 +114,21 @@ Blueprint 的 `callRole` 不再采用 adapter 对象上的 `modelResolved`。它
 | AC-3 | 通过 | `blueprint-g1.test.mjs` 34 通过 / 0 失败（含 32 个子例），退出码 0 |
 | AC-4 | 通过 | `blueprint-ui.test.mjs` 含在插件测试中，7 通过 / 0 失败 |
 | AC-5 | 通过 | `orchestrator` 的 `npm test` 163 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
+
+## 列表读取错误
+
+审查指出：`listSessions` 把 `readdirSync` 的所有异常都收成空数组，插件随即返回 `ok: true`。有效项目里 `.collab/blueprint` 若是普通文件、被拒绝访问或发生 I/O 错误，Blueprint 页会显示「还没有 Blueprint 会话」，而不是可重试的读取错误。原先的 UI 用例把项目路径本身写成文件，请求在项目校验处就被拒绝，没有走到列表读取。
+
+现在只在根目录确实不存在（`ENOENT`）时返回空列表。根路径不是目录，或读取出现其它错误，抛出 `E_LIST`。插件原有的路由 `catch` 把它变成 `ok: false` 和原因，页面显示读取错误和重试，不显示空状态。`status` 同样报告这个错误，并且不改动那个文件。
+
+## 自测（列表读取）
+
+在仓库根用 Node 跑了与 `acceptance.md` 相同的检查（本环境是 bash，不是 pwsh）。界面没有桌面浏览器，插件测试用同一套渲染桩驱动真实 `/agentline/blueprint` 路由。
+
+| AC | 结果 | 输出 / 退出码 |
+|---|---|---|
+| AC-1 | 通过 | `node --check` 三个文件后语法检查通过，退出码 0 |
+| AC-2 | 通过 | `blueprint-cli.test.mjs` 10 通过 / 0 失败，退出码 0 |
+| AC-3 | 通过 | `blueprint-g1.test.mjs` 34 通过 / 0 失败，退出码 0 |
+| AC-4 | 通过 | `blueprint-ui.test.mjs` 7 通过 / 0 失败，退出码 0 |
+| AC-5 | 通过 | `orchestrator` 的 `npm test` 164 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
