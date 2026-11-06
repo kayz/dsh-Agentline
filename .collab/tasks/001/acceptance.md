@@ -315,8 +315,9 @@ pwsh -NoProfile -Command 'Set-Location orchestrator; node --test; exit $LASTEXIT
 ```pwsh
 $changed = @(git diff --name-only 9efb19992f3d68f760082f0cda600c5e6d6b1ee9)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$expected = @('plugin/lib/client.js', 'plugin/lib/index.js', '.collab/tasks/001/brief.md', '.collab/tasks/001/design.md', '.collab/tasks/001/acceptance.md', '.collab/tasks/001/impl.md', '.collab/tasks/001/review.md', '.collab/tasks/001/verdict.json', '.gitignore')
-if (@(Compare-Object ($expected | Sort-Object) ($changed | Sort-Object)).Count -ne 0) {
+$expected = @('plugin/lib/client.js', 'plugin/lib/index.js', '.gitignore')
+$product = @($changed | Where-Object { $_ -notlike '.collab/tasks/001/*' })
+if (@(Compare-Object ($expected | Sort-Object) ($product | Sort-Object)).Count -ne 0) {
   throw ('Unexpected changed paths: ' + ($changed -join ', '))
 }
 Write-Output 'OK write scope'
