@@ -1,0 +1,20 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "1935693b3521428615e3cbe0990684a09f6cc42d",
+  "passed": 2,
+  "total": 5,
+  "findings": [
+    {"severity": "P1", "description": "缺失问题文件或缺失有效用户动作的已关闭阻塞问题可使 G0 通过。", "evidence": "orchestrator/lib/studio.mjs:241-245,267,311-314,878,924-928"},
+    {"severity": "P1", "description": "专家拒绝后的用户答复未传入重新确认，也未更新纪要和决策或使已有确认失效。", "evidence": "orchestrator/lib/studio.mjs:456-471,675-677,733-764,800-823"},
+    {"severity": "P1", "description": "声明 readonly_mode=true 会跳过强制只读参数，可使 Codex 使用 workspace-write。", "evidence": "orchestrator/lib/studio.mjs:53-63; orchestrator/config/agentline.config.json:25; orchestrator/lib/adapters/codex.mjs:66-75"},
+    {"severity": "P2", "description": "缺失或损坏的关联证据未作为 UI 读取错误返回。", "evidence": "orchestrator/lib/studio.mjs:241-250,263-273; plugin/lib/index.js:935-942"},
+    {"severity": "P2", "description": "缺少专家归属或角色模型的确认仍可通过 G0。", "evidence": "orchestrator/lib/studio.mjs:885-893"}
+  ],
+  "results": [
+    {"id": "AC-1", "pass": true, "evidence": "ci-results.json: AC-1 exitCode 0，AC-1 OK"},
+    {"id": "AC-2", "pass": false, "evidence": "ci-results.json: AC-2 exitCode 0，AC-2 OK；orchestrator/lib/studio.mjs:53-63,456-471,675-677,733-764"},
+    {"id": "AC-3", "pass": false, "evidence": "ci-results.json: AC-3 exitCode 0，AC-3 OK；orchestrator/lib/studio.mjs:241-245,311-314,885-893,924-928"},
+    {"id": "AC-4", "pass": false, "evidence": "ci-results.json: AC-4 exitCode 0，AC-4 OK；orchestrator/lib/studio.mjs:243-250,263-273；plugin/lib/index.js:935-942"},
+    {"id": "AC-5", "pass": true, "evidence": "ci-results.json: AC-5 exitCode 0，96 tests，96 pass，0 fail，AC-5 OK"}
+  ]
+}
