@@ -1,60 +1,17 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "9063906e9f1478b7cbcb3a4293e8a8c8ee94a08c",
-  "passed": 2,
+  "git_sha": "da44efcf5a3951e1caad6c0a4e7f7d0db0071e5f",
+  "passed": 3,
   "total": 5,
   "findings": [
-    {
-      "severity": "P1",
-      "description": "???????????? Codex ??????",
-      "evidence": "orchestrator/lib/studio.mjs:150,445-465; orchestrator/config/agentline.config.json:17-25; orchestrator/lib/adapters/codex.mjs:66-75"
-    },
-    {
-      "severity": "P1",
-      "description": "G0 ?????????????????????????????",
-      "evidence": "orchestrator/lib/studio.mjs:195-218,256-268,773-780,801-820"
-    },
-    {
-      "severity": "P1",
-      "description": "????????????????????????????????",
-      "evidence": "orchestrator/lib/studio.mjs:495-512,565-569,625-672,696-719,778-782,823-825"
-    },
-    {
-      "severity": "P2",
-      "description": "??????????????UI ?????????",
-      "evidence": "orchestrator/lib/studio.mjs:195-218; plugin/lib/index.js:928-935"
-    },
-    {
-      "severity": "P2",
-      "description": "??????? JSON ?????????G0 ????????",
-      "evidence": "orchestrator/lib/studio.mjs:616-624,788-790"
-    }
+    {"severity":"P1","description":"轮次耗尽后仍可回答新拒绝并继续确认，计数被封顶而掩盖后续轮次。","evidence":"orchestrator/lib/studio.mjs:799-807,882-905,969-989,1053-1058,1112-1118; orchestrator/test/studio-cli.test.mjs:415-434"},
+    {"severity":"P1","description":"角色选择接受未证明可调用或身份未验证的模型。","evidence":"orchestrator/lib/studio.mjs:248-260; orchestrator/lib/model-catalog.mjs:87-92"}
   ],
   "results": [
-    {
-      "id": "AC-1",
-      "pass": true,
-      "evidence": "ci-results.json AC-1: exitCode 0, AC-1 OK"
-    },
-    {
-      "id": "AC-2",
-      "pass": false,
-      "evidence": "ci-results.json AC-2: exitCode 0, AC-2 OK; orchestrator/lib/studio.mjs:445-465,495-512,616-672,696-719"
-    },
-    {
-      "id": "AC-3",
-      "pass": false,
-      "evidence": "ci-results.json AC-3: exitCode 0, AC-3 OK; orchestrator/lib/studio.mjs:195-218,256-268,773-780,801-820"
-    },
-    {
-      "id": "AC-4",
-      "pass": false,
-      "evidence": "ci-results.json AC-4: exitCode 0, AC-4 OK; orchestrator/lib/studio.mjs:195-218; plugin/lib/index.js:928-935"
-    },
-    {
-      "id": "AC-5",
-      "pass": true,
-      "evidence": "ci-results.json AC-5: exitCode 0, 91 passed, 0 failed, AC-5 OK"
-    }
+    {"id":"AC-1","pass":true,"evidence":"ci-results.json AC-1: exitCode 0, AC-1 OK"},
+    {"id":"AC-2","pass":false,"evidence":"ci-results.json AC-2: exitCode 0, AC-2 OK; orchestrator/lib/studio.mjs:248-260,799-807,882-905,969-989"},
+    {"id":"AC-3","pass":false,"evidence":"ci-results.json AC-3: exitCode 0, AC-3 OK; orchestrator/lib/studio.mjs:882-905,969-989,1053-1058,1112-1118"},
+    {"id":"AC-4","pass":true,"evidence":"ci-results.json AC-4: exitCode 0, AC-4 OK; plugin/test/studio-ui.test.mjs:482,516,600,616,731,794,835,856"},
+    {"id":"AC-5","pass":true,"evidence":"ci-results.json AC-5: exitCode 0, 108 passed, 0 failed, AC-5 OK"}
   ]
 }
