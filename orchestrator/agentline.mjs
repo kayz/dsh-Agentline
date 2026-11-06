@@ -130,6 +130,12 @@ async function cmdModels() {
   const sub = args._[1]
   if (sub === 'discover') {
     const cache = await discoverAll(config, { providers: args.provider ? [args.provider] : null })
+    if (args.provider) {
+      try {
+        const old = JSON.parse(fs.readFileSync(paths.models, 'utf8'))
+        cache.providers = { ...(old.providers || {}), ...cache.providers }
+      } catch { /* first discovery */ }
+    }
     saveDiscovery(paths, cache)
     for (const row of discoverySummary(cache)) {
       log(`${row.provider}: source=${row.source} models=${row.models}${row.warnings.length ? ' warnings=' + row.warnings.join('; ') : ''}`)
