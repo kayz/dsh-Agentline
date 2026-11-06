@@ -193,7 +193,14 @@ async function readTaskDetail(project, taskId, tail = 160, render = false) {
   } catch { /* 没有日志目录也正常 */ }
 
   const attention = readJsonFile(path.join(dir, 'attention.json'))
-  return { project, task: taskId, dir, worktree: located.worktree, state, runs, logs, render, attention }
+  let stepLedger = []
+  try {
+    stepLedger = fs.readFileSync(path.join(dir, 'step-ledger.jsonl'), 'utf8')
+      .split(/\r?\n/).filter(Boolean).slice(-100)
+      .map((line) => { try { return JSON.parse(line) } catch { return null } })
+      .filter(Boolean)
+  } catch { /* no K1 ledger */ }
+  return { project, task: taskId, dir, worktree: located.worktree, state, runs, logs, render, attention, stepLedger }
 }
 
 // ───────────────────────────── 用量 ─────────────────────────────
