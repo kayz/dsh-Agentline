@@ -1,7 +1,7 @@
 {
   "name": "dsh-agentline",
   "description": "AgentLine for DSH：对话内派活、worktree 队列、运行中输入、任务状态与额度胶囊",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "entry": {
     "name": "dsh-agentline",
     "inject": []
