@@ -160,7 +160,7 @@ claude / codex / codebuddy 的流式事件会被解析：`tool_use` / `item.star
 
 ## 本机插件（已升级）
 
-插件 v0.17.0 已通过标准 `dsh plugin` 流程安装：Host 已挂载，浏览器端刷新/重启 DSH 后生效。
+插件 v0.18.0 已通过标准 `dsh plugin` 流程安装：Host 已挂载，浏览器端刷新/重启 DSH 后生效。
 设置入口：**Plugins → AgentLine**（或 Settings → Plugins），可配置 orchestrator 路径、Node、默认仓库，
 以及 DeepSeek / Claude / Codex / Buddy 额度凭据（`role('secret')` 字段，只存本机 profile，不写仓库）。
 源码在本仓库 `plugin/`；真实环境验收清单见

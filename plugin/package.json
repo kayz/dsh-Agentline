@@ -1,6 +1,6 @@
 {
   "name": "dsh-agentline",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "AgentLine for DSH：对话内派活（design→dev→CI→review）、worktree 队列、note/amendment/attention、任务状态与额度胶囊。",
   "type": "module",
   "main": "lib/index.js",
