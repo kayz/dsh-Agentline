@@ -9,7 +9,7 @@ import { writeHandoff } from './handoff.mjs'
 import { pendingInputs, markConsumed } from './inputs.mjs'
 
 // 网络抖动（TLS 断流、连接重置）不是模型能力问题：应重试同一模型，而不是换候选
-const TRANSIENT = /tls handshake|stream disconnected|econnreset|etimedout|socket hang up|fetch failed|reconnecting|network error|workspace routing discovery|timed out/i
+const TRANSIENT = /tls handshake|stream disconnected|econnreset|etimedout|socket hang up|socket disconnected|secure tls|fetch failed|reconnecting|network error|workspace routing discovery|timed out/i
 export function isTransientError(error) { return !!error && TRANSIENT.test(String(error)) }
 
 // 流程自身产生的文件不算产出（日志/交班单/锁/live 等）

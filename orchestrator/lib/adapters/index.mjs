@@ -8,12 +8,14 @@ import { claude } from './claude.mjs'
 import { codex } from './codex.mjs'
 import { codebuddy } from './codebuddy.mjs'
 import { gemini } from './gemini.mjs'
+import { cursor } from './cursor.mjs'
 
 export const ADAPTERS = {
   'claude-cli': claude,
   'codex-cli': codex,
   'codebuddy-cli': codebuddy,
   'gemini-cli': gemini,
+  'cursor-agent': cursor,
 }
 
 export function getAdapter(providerCfg) {

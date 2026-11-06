@@ -80,7 +80,7 @@ export function commandExists(command) {
 export function runProcess({
   command, prefixArgs = [], args = [], cwd = process.cwd(), env = null,
   timeoutMs = 600_000, logPath = null, header = null, stallMinutes = null,
-  classify = null, apiStallSeconds = 120, toolStallMinutes = 60,
+  classify = null, apiStallSeconds = 120, toolStallMinutes = 60, input = null,
 } = {}) {
   let stream = null
   if (logPath) {
@@ -105,8 +105,9 @@ export function runProcess({
         cwd,
         windowsHide: true,
         env: env || process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       })
+      if (input !== null && child.stdin) child.stdin.end(String(input))
     } catch (e) {
       resolve({ exitCode: -1, stdout: '', stderr: e.message, timedOut: false, spawnError: e.message, abortedReason: null })
       return
