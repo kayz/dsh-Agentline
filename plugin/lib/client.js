@@ -111,12 +111,113 @@ window.__ModuleLoader__.load({
       { cmd: '/agentline', desc: '显示当前工作区的任务数与运行中数量', ok: true },
       { cmd: '/agentline <目标>', desc: '在当前工作区新建任务并启动 flow（design → dev → CI → review）', ok: true },
       { cmd: '/agentline --project <路径> <目标>', desc: '指定工作区派活', ok: true },
-      { cmd: '/agentline studio …', desc: 'Studio 立项与讨论', ok: false },
+      { cmd: '/agentline studio new|run|answer|conclude', desc: 'Studio 会话：新建、单步运行、回答、评估 G0', ok: true },
       { cmd: '/agentline blueprint …', desc: 'Blueprint 设计与 G1', ok: false },
       { cmd: '/agentline approve …', desc: 'gate 批准（需原话）', ok: false },
     ]
     const STAGE_TEXT = { not_started: '未开始', idle: '空闲' }
     const SOURCE_TEXT = { blueprint: 'Blueprint', adhoc: '独立' }
+
+    // 渠道：模型目录按真实 provider 分组；空组也要可见
+    const CHANNELS = [
+      { id: 'claude', label: 'Claude' },
+      { id: 'codex', label: 'Codex' },
+      { id: 'codebuddy', label: 'CodeBuddy' },
+      { id: 'cursor', label: 'Cursor' },
+      { id: 'gemini', label: 'Gemini' },
+    ]
+    const CHANNEL_IDS = CHANNELS.map((c) => c.id)
+    const CHANNEL_LABEL = CHANNELS.reduce((m, c) => { m[c.id] = c.label; return m }, {})
+
+    // Studio / Blueprint / Build 的全部 11 个阶段角色
+    const STUDIO_ROLE_ROWS = [
+      { id: 'expert_a', label: '专家A' },
+      { id: 'expert_b', label: '专家B' },
+      { id: 'expert_c', label: '专家C' },
+      { id: 'moderator', label: '主持' },
+      { id: 'scribe', label: '书记' },
+    ]
+    const BLUEPRINT_ROLE_ROWS = [
+      { id: 'designer', label: '设计师' },
+      { id: 'reviewer', label: '评审' },
+      { id: 'test_architect', label: '测试架构师' },
+    ]
+    const BUILD_ROLE_ROWS = [
+      { id: 'designer', label: '设计师', maps: 'design' },
+      { id: 'developer', label: '开发者', maps: 'dev' },
+      { id: 'verifier', label: '验证者', maps: 'review' },
+    ]
+    const TIER_TEXT = { expert_a: 'top', expert_b: 'top', expert_c: 'top', moderator: 'top', scribe: 'advanced' }
+    const STUDIO_STEPS = ['expert_a', 'expert_b', 'expert_c', 'moderator', 'scribe', 'confirm_a', 'confirm_b', 'confirm_c']
+    const STUDIO_STATUS_TEXT = {
+      running: '进行中', awaiting_user: '待你处理', ready: '可评估 G0', concluded: '已结束',
+      missing: '不存在', empty: '空', corrupt: '损坏', failed: '失败',
+    }
+    const show = (v) => (v === undefined || v === null || v === '' || v === 'unknown' ? '未知' : String(v))
+    // 与会话核心同一判定：只有带有效用户动作的 answered/default_adopted 才算真的关闭。
+    // 界面不能因为一个状态字符串就把未回答的问题当成已处理。
+    const questionClosed = (q) => {
+      const a = q && q.user_action
+      if (!a || typeof a !== 'object') return false
+      if (a.kind !== 'answer' && a.kind !== 'default' && a.kind !== 'confirm') return false
+      if (!String(a.text || '').trim()) return false
+      if (!a.at || typeof a.at !== 'string') return false
+      const status = String((q && q.status) || 'open')
+      if (status === 'answered' || status === 'resolved') return a.kind === 'answer'
+      if (status === 'default_adopted') return a.kind === 'default'
+      return false
+    }
+    const channelOf = (provider) => {
+      const p = String(provider || '').toLowerCase()
+      return CHANNEL_IDS.indexOf(p) >= 0 ? p : (p ? 'other' : 'unknown')
+    }
+    const groupModels = (models) => {
+      const groups = CHANNELS.map((c) => ({ ...c, models: [] }))
+      const other = { id: 'other', label: '其他渠道', models: [] }
+      for (const m of models || []) {
+        const cid = channelOf(m.provider)
+        const g = groups.find((x) => x.id === cid)
+        if (g) g.models.push(m)
+        else other.models.push(m)
+      }
+      return other.models.length ? [...groups, other] : groups
+    }
+    const buildRoleRows = (studioRoles, routing) => {
+      const rows = []
+      for (const r of STUDIO_ROLE_ROWS) {
+        const cfg = (studioRoles || {})[r.id] || {}
+        rows.push({
+          key: 'studio-' + r.id, stage: 'Studio', role: r.id, label: r.label,
+          primary: cfg.primary || null,
+          backups: cfg.backups || [],
+          tier: TIER_TEXT[r.id],
+          constraint: cfg.constraint || (r.id === 'scribe' ? 'scribe ≠ moderator' : (r.id === 'moderator' ? 'top；书记须与之不同' : 'top；独立调用')),
+          probe: cfg.probe || null,
+          readonly: false,
+        })
+      }
+      for (const r of BLUEPRINT_ROLE_ROWS) {
+        rows.push({
+          key: 'blueprint-' + r.id, stage: 'Blueprint', role: r.id, label: r.label,
+          primary: null, backups: [], tier: 'top',
+          constraint: r.id === 'reviewer' ? 'top · ≠设计厂商' : (r.id === 'test_architect' ? 'top · ≠两者（偏好）' : 'top'),
+          probe: null, readonly: true,
+        })
+      }
+      for (const r of BUILD_ROLE_ROWS) {
+        const eff = (routing && routing.roles && routing.roles[r.maps]) || {}
+        const order = Array.isArray(eff.order) ? eff.order : []
+        rows.push({
+          key: 'build-' + r.id, stage: 'Build', role: r.id, label: r.label,
+          primary: eff.model || order[0] || null,
+          backups: order.slice(1),
+          tier: '—',
+          constraint: '沿用现有 ' + r.maps + ' 路由',
+          probe: null, readonly: false,
+        })
+      }
+      return rows
+    }
 
     function stageClass(stage, current) {
       const c = STAGES.indexOf(current)
@@ -268,6 +369,18 @@ window.__ModuleLoader__.load({
       const [modelsData, setModelsData] = React.useState(null)
       const [matrix, setMatrix] = React.useState({ design: [], dev: [], review: [] })
       const [matrixMsg, setMatrixMsg] = React.useState('')
+      const [studioList, setStudioList] = React.useState(null)
+      const [studioRoles, setStudioRoles] = React.useState({})
+      const [studioSel, setStudioSel] = React.useState(null)
+      const [studioDetail, setStudioDetail] = React.useState(null)
+      const [studioDetailError, setStudioDetailError] = React.useState('')
+      const [studioBusy, setStudioBusy] = React.useState(false)
+      const [studioMsg, setStudioMsg] = React.useState('')
+      const [studioNew, setStudioNew] = React.useState({ id: '', title: '', input: '' })
+      const [studioAnswers, setStudioAnswers] = React.useState({})
+      const [catalogQuery, setCatalogQuery] = React.useState('')
+      const [channelFilter, setChannelFilter] = React.useState('all')
+      const [collapsedChannels, setCollapsedChannels] = React.useState({})
 
       // 访问代次区分 A → B → A；任务代次同时隔离同项目内的切换和写操作反馈。
       const view = React.useRef({ alive: true, epoch: 0, taskEpoch: 0 })
@@ -298,11 +411,15 @@ window.__ModuleLoader__.load({
         if (p === view.current.project) return
         view.current.epoch++
         view.current.project = p
+        view.current.studio = null
         clearTask()
         view.current.task = null
         setProject(p); setCurrent(null); setTasks([]); setTokens(null); setListReady(false)
         setPipeline(null); setRouting(null); setDraft({}); setRouteMsg(''); setSaving(false)
         setPendingFocus(null); setErr(null)
+        setStudioList(null); setStudioSel(null); setStudioDetail(null); setStudioDetailError('')
+        setStudioRoles({})
+        setStudioMsg(''); setStudioBusy(false); setStudioNew({ id: '', title: '', input: '' }); setStudioAnswers({})
         setSourceErrors((e) => ({ ...e, routing: '' }))
         loaded.current.routing = false
         loaded.current.pipeline = false
@@ -549,6 +666,71 @@ window.__ModuleLoader__.load({
           { ok: false, error: (r && r.error) || '读取失败（宿主可能未提供 /agentline/pipeline）' })
         loaded.current.pipeline = !!(r && r.ok && r.summary)
       }
+      const loadStudio = async (proj, id) => {
+        if (!proj || proj !== view.current.project) return
+        const s = scope(), n = begin('studio')
+        const q = '/agentline/studio?project=' + encodeURIComponent(proj) + (id ? '&id=' + encodeURIComponent(id) : '')
+        const r = await j(q)
+        if (!latest('studio', n, s)) return
+        if (!id) {
+          setStudioList(r && r.ok
+            ? { ok: true, sessions: r.sessions || [] }
+            : { ok: false, error: failure(r) })
+          if (r && r.ok) setStudioRoles(r.roles || {})
+          return
+        }
+        if (!r || !r.ok) {
+          setStudioDetail(null)
+          const label = r && r.state ? STUDIO_STATUS_TEXT[r.state] : null
+          const reason = (r && r.error) ? r.error : failure(r)
+          setStudioDetailError('无法读取会话：' + reason + (label ? '（状态：' + label + '）' : ''))
+          return
+        }
+        setStudioDetailError('')
+        setStudioDetail(r)
+      }
+
+      const selectStudio = (id) => {
+        if (id === view.current.studio) return
+        view.current.studio = id
+        setStudioSel(id); setStudioDetail(null); setStudioDetailError(''); setStudioMsg(''); setStudioAnswers({})
+      }
+
+      // 用户动作 = 一次 CLI 调用；失败只显示原因，不自动重发
+      const studioAction = async (action, extra) => {
+        if (!project || project !== view.current.project || studioBusy) return
+        const s = scope()
+        setStudioBusy(true)
+        setStudioMsg('')
+        const res = await fetch('/agentline/studio', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ project, action, ...(extra || {}) }),
+        }).then((r) => r.json()).catch(() => null)
+        if (!valid(s)) return
+        if (!res) {
+          setStudioMsg('操作失败：请求发不出去')
+          setStudioBusy(false)
+          return
+        }
+        if (!res.ok) {
+          const tail = String(res.output || '').split('\n').filter(Boolean).slice(-2).join(' ')
+          setStudioMsg('操作失败：' + (res.error || tail || ('exit ' + res.code)))
+          setStudioBusy(false)
+          return
+        }
+        setStudioMsg(action === 'conclude' ? 'G0 已重新计算' : (action === 'new' ? '会话已创建' : '已提交'))
+        const nextId = action === 'new' && extra && extra.id ? extra.id : studioSel
+        if (action === 'new') {
+          setStudioNew({ id: '', title: '', input: '' })
+          view.current.studio = nextId
+          setStudioSel(nextId)
+        }
+        setStudioBusy(false)
+        await loadStudio(project, null)
+        if (nextId) await loadStudio(project, nextId)
+      }
+
       const loadCatalog = async () => {
         const n = begin('catalog')
         const r = await j('/agentline/catalog')
@@ -610,6 +792,13 @@ window.__ModuleLoader__.load({
         const it = window.setInterval(() => loadDetail(current, project), 5000)
         return () => { begin('detail'); window.clearInterval(it) }
       }, [current, project, logMode])
+
+      React.useEffect(() => {
+        if (!project) return
+        loadStudio(project, studioSel)
+        const it = window.setInterval(() => loadStudio(project, studioSel), 5000)
+        return () => { begin('studio'); window.clearInterval(it) }
+      }, [project, studioSel])
 
       React.useEffect(() => {
         if (pendingFocus && pendingFocus.task && (!pendingFocus.project || pendingFocus.project === project) && tasks.some((t) => t.id === pendingFocus.task)) {
@@ -708,25 +897,257 @@ window.__ModuleLoader__.load({
         }
         return box(title + ' 会话', content, kind === 'blueprint' ? fine('G1：未实现') : null)
       }
-      const renderStudio = () => renderStage('studio', 'Studio')
+      const renderStudio = () => {
+        const list = studioList
+        const sessions = list && list.ok ? list.sessions : []
+        const detail = studioDetail
+        const busy = studioBusy || !project
+        const openBlocking = detail ? (detail.questions || []).filter((q) => q.blocking && !questionClosed(q)) : []
+        const session = detail ? detail.session : null
+        const sid = studioSel
+        const nextStep = session ? (STUDIO_STEPS.find((x) => (session.steps_done || []).indexOf(x) < 0) || 'done') : null
+        const concluded = session && session.status === 'concluded'
+        // 轮次用满（2/2）且还会开启新一轮讨论时 run 会被核心拒绝：界面直接禁用并说明原因。
+        // 讨论已结束、只剩确认时核心会继续允许，因此这里只在 blocking_reason 为 round_limit 时禁用。
+        const roundsBlocked = !!(session && (session.blocking_reason === 'round_limit' || session.blocking_reason === 'rounds_invalid'))
+        const runTitle = !detail ? '先选择一个会话'
+          : concluded ? '会话已结束'
+            : roundsBlocked ? '业务轮次已用满 2/2，停止继续讨论'
+              : openBlocking.length ? '需要先回答 ' + openBlocking.length + ' 个阻塞问题'
+                : '运行下一步（每次只执行一个角色调用）'
+        const detailNode = studioDetailError
+          ? h('div', { className: 'agl-box', 'data-testid': 'studio-detail-error' },
+            fine(studioDetailError),
+            h('button', { className: 'agl-btn', 'data-testid': 'studio-retry', onClick: () => loadStudio(project, studioSel) }, '重试'))
+          : !detail
+            ? h('div', { className: 'agl-empty' }, studioSel ? '读取中…' : '选择一个 Studio 会话查看角色、问题、决策与 G0')
+            : h('div', null,
+              box('会话 · ' + sid,
+                h('div', { className: 'agl-route' },
+                  h('b', { 'data-testid': 'studio-session-status' }, STUDIO_STATUS_TEXT[session.status] || show(session.status)),
+                  h('span', { className: 'agl-fine' }, '下一步：' + show(nextStep)),
+                  h('span', { className: 'agl-fine' }, '修改于 ' + when(session.updated_at))),
+                fine(session.title || sid),
+                h('div', { className: 'agl-route', style: { marginTop: '8px' } },
+                  h('button', {
+                    className: 'agl-btn', 'data-testid': 'studio-run', disabled: busy || !session || concluded || roundsBlocked || openBlocking.length > 0,
+                    title: runTitle, onClick: () => studioAction('run', { id: sid }),
+                  }, studioBusy ? '执行中…' : '运行下一步'),
+                  h('button', {
+                    className: 'agl-btn', 'data-testid': 'studio-conclude', disabled: busy || !session,
+                    title: '按落盘证据重新计算 G0（不代用户或专家确认）', onClick: () => studioAction('conclude', { id: sid }),
+                  }, '结束并评估 G0'),
+                  studioMsg ? h('span', { className: 'agl-fine', 'data-testid': 'studio-msg' }, studioMsg) : null),
+                openBlocking.length ? fine('等待用户：' + openBlocking.map((q) => q.id).join(', ')) : null),
+              box('角色', h('table', { className: 'agl-t' },
+                h('thead', null, h('tr', null, ['角色', '模型', '档位', 'id'].map((x) => h('th', { key: x }, x)))),
+                h('tbody', null, ['expert_a', 'expert_b', 'expert_c', 'moderator', 'scribe'].map((role) => {
+                  const r = (session.roles || {})[role] || {}
+                  return h('tr', { key: role, 'data-testid': 'studio-role-' + role },
+                    h('td', null, role), h('td', { className: 'mono' }, show(r.model)), h('td', null, show(r.tier)), h('td', { className: 'agl-fine' }, show(r.id)))
+                })))),
+              box('问题 (' + (detail.questions || []).length + ')',
+                (detail.questions || []).length === 0 ? fine('还没有问题（主持尚未运行或没有需要澄清的问题）') :
+                  (detail.questions || []).map((q) => h('div', {
+                    key: q.id, className: 'agl-card' + (q.blocking && q.status === 'open' ? ' bad' : ''),
+                    'data-testid': 'question-' + q.id,
+                  },
+                    h('div', { className: 'agl-route' },
+                      h('span', { className: 'agl-tag' }, q.blocking ? '阻塞' : '普通'),
+                      h('b', null, q.id), h('span', { className: 'agl-fine' }, q.status)),
+                    fine(q.text),
+                    !questionClosed(q)
+                      ? h('div', { className: 'agl-ctl' },
+                        h('input', {
+                          className: 'agl-input', 'data-testid': 'answer-input-' + q.id,
+                          placeholder: '回答…', value: studioAnswers[q.id] || '',
+                          onChange: (e) => setStudioAnswers((m) => ({ ...m, [q.id]: e.target.value })),
+                          onKeyDown: (e) => { if (e.key === 'Enter') studioAction('answer', { id: sid, question: q.id, text: (studioAnswers[q.id] || '').trim() }) },
+                        }),
+                        h('button', {
+                          className: 'agl-btn', 'data-testid': 'answer-submit-' + q.id,
+                          disabled: busy || !(studioAnswers[q.id] || '').trim(),
+                          onClick: () => studioAction('answer', { id: sid, question: q.id, text: (studioAnswers[q.id] || '').trim() }),
+                        }, '提交回答'),
+                        q.default
+                          ? h('button', {
+                            className: 'agl-btn', 'data-testid': 'answer-default-' + q.id, disabled: busy,
+                            onClick: () => studioAction('answer', { id: sid, question: q.id, default: true }),
+                          }, '采用默认（' + q.default + '）')
+                          : null)
+                      : fine('用户动作：' + (q.user_action ? ((q.user_action.kind === 'default' ? '采用默认' : '回答') + ' · ' + q.user_action.text) : '无')),
+                  ))),
+              box('决策 (' + (detail.decisions || []).length + ')',
+                (detail.decisions || []).length === 0 ? fine('还没有决策（书记尚未运行）') :
+                  (detail.decisions || []).map((d) => h('div', {
+                    key: d.id, className: 'agl-card' + (d.confirmed_by_user ? ' ok' : ''),
+                    'data-testid': 'decision-' + d.id,
+                  },
+                    h('div', { className: 'agl-route' }, h('b', null, d.id + ' · ' + d.title), h('span', { className: 'agl-tag' }, show(d.status))),
+                    fine(d.detail || '（无说明）'),
+                    // 轮次必须有明确记录：缺失或损坏时显示未知，不能用 0 假装没超限。
+                    fine('默认：' + show(d.default) + ' · 轮次 ' + (Number.isInteger(d.rounds_used) && d.rounds_used >= 0 ? d.rounds_used + '/2' : '未知')),
+                    d.confirmed_by_user
+                      ? fine('用户动作：' + (d.confirmed_by_user.kind === 'default' ? '采用默认' : '确认') + ' · ' + d.confirmed_by_user.text)
+                      : h('div', { className: 'agl-ctl' },
+                        h('button', {
+                          className: 'agl-btn', 'data-testid': 'decision-confirm-' + d.id, disabled: busy,
+                          onClick: () => studioAction('answer', { id: sid, decision: d.id, text: '确认采用该决策' }),
+                        }, '确认'),
+                        d.default
+                          ? h('button', {
+                            className: 'agl-btn', 'data-testid': 'decision-default-' + d.id, disabled: busy,
+                            onClick: () => studioAction('answer', { id: sid, decision: d.id, default: true }),
+                          }, '采用默认')
+                          : null),
+                  ))),
+              box('确认',
+                ['expert_a', 'expert_b', 'expert_c'].map((role) => {
+                  const c = (detail.confirmations || {})[role]
+                  return h('div', { key: role, className: 'agl-route', 'data-testid': 'confirmation-' + role },
+                    h('span', { className: 'agl-fine', style: { width: '72px' } }, role),
+                    h('span', { className: 'agl-tag' }, c ? show(c.verdict) : '未确认'),
+                    h('span', { className: 'agl-fine' }, c ? (c.notes || '') : '尚无独立确认'))
+                })),
+              box('G0 · ' + (detail.g0 ? (detail.g0.pass ? 'PASS' : 'FAIL') : '未评估'),
+                detail.g0 && detail.g0.checks && detail.g0.checks.length
+                  ? h('table', { className: 'agl-t', 'data-testid': 'studio-g0' },
+                    h('thead', null, h('tr', null, ['检查', '结果', '说明', '证据'].map((x) => h('th', { key: x }, x)))),
+                    h('tbody', null, detail.g0.checks.map((c) => h('tr', { key: c.id, 'data-testid': 'g0-' + c.id },
+                      h('td', { className: 'mono' }, c.id),
+                      h('td', { style: { color: c.pass ? '#3fb950' : '#f85149' } }, c.pass ? '✓' : '✗'),
+                      h('td', { className: 'agl-fine' }, c.desc),
+                      h('td', { className: 'agl-fine' }, show(c.evidence))))))
+                  : fine(detail.g0 ? '无法评估：' + show((detail.g0.errors || []).join('; ')) : '尚未求值')),
+              fine('确认与采用默认都会写盘；未回答的问题不会被视为已确认。'))
+        return h('div', { className: 'agl-grid2' },
+          h('div', null,
+            box('Studio 会话' + (list && list.ok ? ' (' + sessions.length + ')' : ''),
+              list === null ? fine('读取中…') :
+                !list.ok ? h('div', { 'data-testid': 'studio-error' },
+                  fine('无法读取 Studio 会话：' + list.error),
+                  h('button', { className: 'agl-btn', onClick: () => loadStudio(project, null) }, '重试'))
+                  : sessions.length === 0 ? h('div', { 'data-testid': 'studio-empty' }, fine('这个项目还没有 Studio 会话；用下面的「新建会话」开始。'))
+                    : sessions.map((s) => h('div', {
+                      key: s.id, className: 'agl-item' + (studioSel === s.id ? ' on' : ''),
+                      'data-testid': 'studio-session-' + s.id, onClick: () => selectStudio(s.id),
+                    },
+                      h('div', { className: 'r1' }, h('span', { className: 'id' }, s.id), h('span', { className: 'agl-fine' }, STUDIO_STATUS_TEXT[s.status] || show(s.status))),
+                      h('div', { className: 'meta' }, s.title || s.id, ' · 下一步 ', show(s.step), s.open_blocking ? ' · 阻塞 ' + s.open_blocking : ''))),
+            ),
+            box('新建会话',
+              h('div', { className: 'agl-route' },
+                h('input', {
+                  className: 'agl-input', 'data-testid': 'studio-new-id', placeholder: '会话 id（安全路径段）',
+                  value: studioNew.id, onChange: (e) => setStudioNew((v) => ({ ...v, id: e.target.value })),
+                }),
+                h('input', {
+                  className: 'agl-input', 'data-testid': 'studio-new-title', placeholder: '标题（可选）',
+                  value: studioNew.title, onChange: (e) => setStudioNew((v) => ({ ...v, title: e.target.value })),
+                })),
+              h('div', { className: 'agl-route', style: { marginTop: '6px' } },
+                h('input', {
+                  className: 'agl-input', style: { flex: 1, minWidth: '160px' }, 'data-testid': 'studio-new-input',
+                  placeholder: '用户输入…', value: studioNew.input,
+                  onChange: (e) => setStudioNew((v) => ({ ...v, input: e.target.value })),
+                })),
+              h('div', { className: 'agl-route', style: { marginTop: '6px' } },
+                h('button', {
+                  className: 'agl-btn', 'data-testid': 'studio-new-submit',
+                  disabled: busy || !studioNew.id.trim() || !studioNew.input.trim(),
+                  onClick: () => studioAction('new', { id: studioNew.id.trim(), title: studioNew.title.trim(), input: studioNew.input }),
+                }, studioBusy ? '创建中…' : '新建会话'),
+                fine('会话写入 .collab/studio/<id>/；每次 run 只前进一步'))),
+          ),
+          h('div', null, detailNode),
+        )
+      }
+
       const renderBlueprint = () => renderStage('blueprint', 'Blueprint')
 
       const renderCatalog = () => {
         const status = catalog === null ? '读取中…' : !catalog.ok ? '无法读取模型目录：' + catalog.error : null
-        const models = catalog && catalog.ok ? catalog.catalog.models || [] : []
+        const allModels = catalog && catalog.ok ? (catalog.catalog.models || []) : []
         const discovery = catalog && catalog.ok ? catalog.discovery : null
-        const providers = [...new Set([...(discovery?.providers || []), ...models.map((m) => m.provider).filter(Boolean)])].sort()
+        const q = catalogQuery.trim().toLowerCase()
+        const match = (m) => {
+          if (channelFilter !== 'all' && channelOf(m.provider) !== channelFilter) return false
+          if (!q) return true
+          return [m.key, m.id, m.provider, m.tier, m.identity, m.availability, m.source]
+            .some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)
+        }
+        const groups = groupModels(allModels).map((g) => ({ ...g, models: g.models.filter(match) }))
+        const providers = [...new Set([...(discovery?.providers || []), ...allModels.map((m) => m.provider).filter(Boolean)])].sort()
+        const shownCount = groups.reduce((n, g) => n + g.models.length, 0)
+        const renderGroup = (g) => {
+          const collapsed = !!collapsedChannels[g.id]
+          const toggle = h('button', {
+            className: 'agl-btn', 'data-testid': 'channel-toggle-' + g.id,
+            onClick: () => setCollapsedChannels((m) => ({ ...m, [g.id]: !m[g.id] })),
+          }, (collapsed ? '▸ ' : '▾ ') + g.label + ' (' + g.models.length + ')')
+          let body = null
+          if (!collapsed) {
+            if (!g.models.length) body = fine('暂无该渠道模型')
+            else {
+              const rows = g.models.map((m) => h('tr', { key: m.key, 'data-testid': 'catalog-row-' + m.key },
+                h('td', { className: 'mono' }, show(m.key)),
+                h('td', null, show(CHANNEL_LABEL[channelOf(m.provider)] || m.provider)),
+                h('td', { className: 'mono' }, show(m.id)),
+                h('td', null, show(m.tier)),
+                h('td', null, show(m.identity)),
+                h('td', null, show(m.availability)),
+                h('td', { className: 'agl-fine' }, show(m.source))))
+              body = table(['模型', '渠道', 'id', '档位', '身份', '可用性', '来源'], rows)
+            }
+          }
+          return h('div', { key: g.id, 'data-testid': 'channel-group-' + g.id, style: { marginBottom: '8px' } },
+            h('div', { className: 'agl-route' }, toggle, h('span', { className: 'agl-fine' }, CHANNEL_LABEL[g.id] || g.label)),
+            body)
+        }
+        const modelContent = status ? fine(status) : h(React.Fragment, null,
+          h('div', { className: 'agl-route', style: { marginBottom: '8px', flexWrap: 'wrap' } },
+            h('select', {
+              className: 'agl-btn', 'data-testid': 'catalog-filter', value: channelFilter,
+              onChange: (e) => setChannelFilter(e.target.value),
+            },
+              h('option', { value: 'all' }, '渠道：全部'),
+              CHANNELS.map((c) => h('option', { key: c.id, value: c.id }, c.label))),
+            h('input', {
+              className: 'agl-input', 'data-testid': 'catalog-search', placeholder: '搜索模型 / id / 档位…',
+              value: catalogQuery, onChange: (e) => setCatalogQuery(e.target.value),
+            }),
+            fine(shownCount + ' / ' + allModels.length + ' 个模型')),
+          allModels.length === 0 ? fine('暂无模型目录数据（运行 agentline models discover 或 agentline models add）') : null,
+          groups.map(renderGroup),
+          fine('discovered 只表示被发现，不等于 callable；未验证身份不会显示为 verified。'))
+        const providerRows = providers.map((p) => h('tr', { key: p },
+          h('td', null, p),
+          h('td', null, allModels.filter((m) => m.provider === p).length),
+          h('td', null, allModels.filter((m) => m.provider === p && m.availability === 'callable').length),
+          h('td', null, allModels.filter((m) => m.provider === p && m.availability === 'discovered').length)))
+        const providerContent = status ? fine(status) : h(React.Fragment, null,
+          discovery && discovery.generatedAt ? fine('发现缓存：' + when(discovery.generatedAt)) : null,
+          providers.length ? table(['Provider', '模型数', 'callable', 'discovered'], providerRows) : fine('暂无 Provider 数据'))
         return h(React.Fragment, null,
-          box('模型目录（只读）', status ? fine(status) : !models.length ? fine('暂无模型目录数据（运行 agentline models discover 或 agentline models add）') :
-            table(['模型', 'Provider', 'id', '档位', '身份', '可用性', '来源'], models.map((m) => h('tr', { key: m.key },
-              [m.key, m.provider || '—', m.id, m.tier, m.identity, m.availability, m.source].map((v, i) => h('td', { key: i }, v)))))),
-          box('Provider（只读）', status ? fine(status) : h(React.Fragment, null,
-            discovery?.generatedAt ? fine('发现缓存：' + when(discovery.generatedAt)) : null,
-            providers.length ? table(['Provider', '模型数', 'callable', 'discovered'], providers.map((p) => {
-              const ms = models.filter((m) => m.provider === p)
-              return h('tr', { key: p }, h('td', null, p), h('td', null, ms.length),
-                h('td', null, ms.filter((m) => m.availability === 'callable').length), h('td', null, ms.filter((m) => m.availability === 'discovered').length))
-            })) : fine('暂无 Provider 数据'))),
+          box('模型目录（按渠道分组 · 只读）', modelContent),
+          box('Provider（只读）', providerContent),
+        )
+      }
+
+      const renderRoleMatrix = () => {
+        const rows = buildRoleRows(studioRoles, routing)
+        return box('角色矩阵 · Studio / Blueprint / Build 共 11 个角色',
+          h('table', { className: 'agl-t', 'data-testid': 'role-matrix' },
+            h('thead', null, h('tr', null, ['阶段', '角色', '主选', '备选', '档位要求', '约束', 'probe'].map((x) => h('th', { key: x }, x)))),
+            h('tbody', null, rows.map((r) => h('tr', { key: r.key, 'data-testid': 'role-row-' + r.key },
+              h('td', null, r.stage),
+              h('td', null, r.label + (r.readonly ? ' · 只读' : '')),
+              h('td', { className: 'mono' }, r.primary ? r.primary : '未设置'),
+              h('td', { className: 'agl-fine' }, r.backups.length ? r.backups.join(' > ') : '—'),
+              h('td', null, show(r.tier)),
+              h('td', { className: 'agl-fine' }, show(r.constraint)),
+              h('td', { className: 'agl-fine' }, r.probe ? r.probe : '未知'))))),
+          fine('Studio 取 studio.roles 配置；Blueprint 未实现，配置与操作只读；Build 映射现有 design/dev/review，编辑在上一节「角色路由」。'),
         )
       }
 
@@ -747,6 +1168,7 @@ window.__ModuleLoader__.load({
           h('select', {
             value: project || '',
             title: '项目（DSH 工作区）',
+            'data-testid': 'project-select',
             disabled: !projectsReady,
             onChange: (e) => switchProject(e.target.value),
           }, projects.length === 0
@@ -820,6 +1242,7 @@ window.__ModuleLoader__.load({
           ) : h('div', { className: 'agl-fine' }, sourceErrors.models || '读取中…'),
         ),
         renderCatalog(),
+        renderRoleMatrix(),
         h('div', { className: 'agl-fine' }, '路径、Node、默认仓库与额度凭据在 DSH「插件 → AgentLine」中设置。'),
       )
 
@@ -904,8 +1327,8 @@ window.__ModuleLoader__.load({
                           h('td', { className: 'agl-fine' }, x.reason || ''))))),
                     ) : null,
                     h('div', { className: 'agl-ctl', style: { marginTop: '8px' } },
-                      h('button', { className: 'agl-icon', disabled: !taskReady, title: '阶段末停止：当前阶段跑完后停下，不留半个阶段', onClick: () => control('stop') }, '⏸'),
-                      h('button', { className: 'agl-icon', disabled: !taskReady, title: '立即终止：杀掉进程树，任务标记为已停止', onClick: () => control('stop-now') }, '⏹'),
+                      h('button', { className: 'agl-icon', 'data-testid': 'task-stop', disabled: !taskReady, title: '阶段末停止：当前阶段跑完后停下，不留半个阶段', onClick: () => control('stop') }, '⏸'),
+                      h('button', { className: 'agl-icon', 'data-testid': 'task-stop-now', disabled: !taskReady, title: '立即终止：杀掉进程树，任务标记为已停止', onClick: () => control('stop-now') }, '⏹'),
                       h('select', {
                         className: 'agl-btn',
                         title: 'note：下一阶段提示；amendment：当前轮作废并回到 design',
@@ -933,12 +1356,13 @@ window.__ModuleLoader__.load({
                       h('div', { className: 'agl-ctl' },
                         h('input', {
                           className: 'agl-input',
+                          'data-testid': 'task-answer-input',
                           placeholder: '回答…（提交后 flow --resume 继续）',
                           value: answerText,
                           onChange: (e) => setAnswerText(e.target.value),
                           onKeyDown: (e) => { if (e.key === 'Enter') control('answer', answerText) },
                         }),
-                        h('button', { className: 'agl-btn', disabled: !taskReady || !answerText.trim(), onClick: () => control('answer', answerText) }, '回答'),
+                        h('button', { className: 'agl-btn', 'data-testid': 'task-answer-submit', disabled: !taskReady || !answerText.trim(), onClick: () => control('answer', answerText) }, '回答'),
                       ),
                     ) : null,
                     h('div', { className: 'agl-fine', style: { marginTop: '8px' } },
@@ -1006,7 +1430,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'agl-panel' },
         renderTop(),
         h('nav', { className: 'agl-tabs', 'aria-label': '驾驶舱页面' }, TABS.map(([id, title]) => h('button', {
-          key: id, className: 'agl-tab' + (tab === id ? ' on' : ''), 'aria-current': tab === id ? 'page' : undefined, onClick: () => setTab(id),
+          key: id, className: 'agl-tab' + (tab === id ? ' on' : ''), 'aria-current': tab === id ? 'page' : undefined, 'data-testid': 'tab-' + id, onClick: () => setTab(id),
         }, title, id === 'home' && pending > 0 ? h('span', { className: 'agl-badge' }, pending) : null))),
         err ? h('div', { className: 'agl-empty' }, err) : null,
         tab === 'build' ? renderBuild() : h('div', { className: 'agl-page' },
@@ -1252,6 +1676,20 @@ window.__ModuleLoader__.load({
     exports.apply = apply
     exports.inject = ['slots', 'configForms']
     exports.name = 'dsh-agentline'
+    // 供本地测试驱动真实渲染与交互；不影响宿主加载
+    exports.__test = {
+      Cockpit,
+      groupModels,
+      channelOf,
+      buildRoleRows,
+      CHANNELS,
+      CHANNEL_IDS,
+      STUDIO_STEPS,
+      STUDIO_ROLE_ROWS,
+      BLUEPRINT_ROLE_ROWS,
+      BUILD_ROLE_ROWS,
+      show,
+    }
     return module.exports
   },
 })

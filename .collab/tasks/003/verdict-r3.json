@@ -1,0 +1,16 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "08d85666001f63f8a69a18fbdccdbb094026c715",
+  "passed": 4,
+  "total": 5,
+  "findings": [
+    {"severity": "P1", "description": "第二轮专家拒绝的问题已回答后，仍禁止所有角色调用，已撤销的专家确认无法重新收集，会话无法完成。", "evidence": "orchestrator/lib/studio.mjs:765-782,884-904; orchestrator/test/studio-cli.test.mjs:388-421"}
+  ],
+  "results": [
+    {"id": "AC-1", "pass": true, "evidence": ".collab/tasks/003/ci-results.json: AC-1 exitCode 0, AC-1 OK"},
+    {"id": "AC-2", "pass": false, "evidence": "CI AC-2 exitCode 0, AC-2 OK；orchestrator/lib/studio.mjs:765-782,884-904；orchestrator/test/studio-cli.test.mjs:388-421 显示第二轮问题解决后不能重新确认"},
+    {"id": "AC-3", "pass": true, "evidence": "CI AC-3 exitCode 0, AC-3 OK；orchestrator/test/studio-g0.test.mjs 覆盖 G0 正反例及证据变化"},
+    {"id": "AC-4", "pass": true, "evidence": "CI AC-4 exitCode 0, AC-4 OK；plugin/test/studio-ui.test.mjs:464,498,582,598,713,776,817,838,909,933"},
+    {"id": "AC-5", "pass": true, "evidence": "CI AC-5 exitCode 0, AC-5 OK；107 passed, 0 failed"}
+  ]
+}

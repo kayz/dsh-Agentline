@@ -17,10 +17,14 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { loadConfig, loadProjectConfig, projectConfigPath, ROLES } from './lib/config.mjs'
 import { getAdapter } from './lib/adapters/index.mjs'
+import {
+  STUDIO_ROLES, readStudio, listSessions, createSession, runStudioStep, answerStudio,
+  concludeStudio, evaluateG0, currentStep, blockingQuestions, StudioError,
+} from './lib/studio.mjs'
 import { discoverAll, saveDiscovery, discoverySummary, setRoleCandidates, addModel, formatModelTable } from './lib/models.mjs'
 import { buildCatalog } from './lib/model-catalog.mjs'
 import { effectiveRole, readProject } from './lib/routing.mjs'
@@ -545,6 +549,131 @@ async function cmdStop() {
   log('已请求停止：当前阶段结束后退出（flow 会自己收尾）')
 }
 
+// ───────────────────────────── studio ─────────────────────────────
+/**
+ * Studio 控制面：状态只存在 <repo>/.collab/studio/<id>/。
+ * 每次 run 只执行一个角色调用；写操作都由这里落盘，插件只转发。
+ */
+async function studioAdapterFactory() {
+  const raw = args['adapter-module']
+  if (!raw) return null
+  const abs = path.resolve(String(raw))
+  if (!fs.existsSync(abs)) fail(`adapter module not found: ${abs}`)
+  const mod = await import(pathToFileURL(abs).href + `?v=${Date.now()}`)
+  const factory = mod.default || mod.createAdapter || mod.adapterFactory
+  if (typeof factory !== 'function') fail('adapter module must export default (provider) => adapter')
+  return (provider) => factory(provider)
+}
+
+function studioRoleOverrides() {
+  const out = {}
+  for (const role of STUDIO_ROLES) {
+    const flag = role.replace(/_/g, '-')
+    if (args[flag]) out[role] = String(args[flag])
+  }
+  return out
+}
+
+function printSession(session) {
+  log(`studio ${session.id}  status=${session.status}  step=${currentStep(session)}  revision=${session.revision}`)
+  for (const role of STUDIO_ROLES) {
+    const r = session.roles?.[role]
+    log(`  ${role.padEnd(10)} ${r ? `${r.model} (${r.id}, ${r.tier})` : '(unset)'}`)
+  }
+}
+
+async function cmdStudio() {
+  const sub = args._[1]
+  if (!['new', 'run', 'answer', 'conclude', 'status'].includes(sub)) {
+    fail('usage: agentline studio new|run|answer|conclude|status --repo <path> [--id <id>] [...]')
+  }
+  const id = args.id || args._[2]
+
+  try {
+    if (sub === 'status') {
+      if (!id) {
+        const sessions = listSessions(repo)
+        if (args.json) { log(JSON.stringify({ repo, sessions }, null, 2)); return }
+        if (!sessions.length) { log(`(no studio sessions in ${path.join(repo, '.collab', 'studio')})`); return }
+        for (const s of sessions) log(`${s.id.padEnd(24)} state=${s.state} status=${s.status} step=${s.step || '-'} open_blocking=${s.open_blocking ?? '-'}`)
+        return
+      }
+      const r = readStudio(repo, id)
+      if (args.json) {
+        const g0 = r.session ? evaluateG0(repo, id) : null
+        log(JSON.stringify({ id, ...r, g0 }, null, 2))
+        return
+      }
+      if (r.state === 'missing') { log(`studio ${id}: missing (${path.join(repo, '.collab', 'studio', id)})`); return }
+      if (r.state === 'empty') { log(`studio ${id}: empty (session.json missing)`); return }
+      if (r.state === 'corrupt') { log(`studio ${id}: corrupt`); for (const e of r.errors) log('  ' + e); process.exit(1) }
+      printSession(r.session)
+      const open = blockingQuestions(r.questions, r.questionsInvalid)
+      log(`  questions=${(r.questions || []).length} open_blocking=${open.length}  decisions=${(r.decisions || []).length}`)
+      for (const q of open) log(`  ⏸ ${q.id} ${q.text}`)
+      for (const d of r.decisions || []) log(`  ${d.confirmed_by_user ? '✓' : '·'} ${d.id} ${d.title} [${d.status}] rounds=${d.rounds_used ?? 0}`)
+      return
+    }
+
+    if (!id) fail(`studio ${sub} requires --id <id>`)
+
+    if (sub === 'new') {
+      const session = createSession(repo, {
+        id: String(id),
+        title: args.title,
+        input: args.input || args._[3],
+      }, { config, projectCfg, overrides: studioRoleOverrides() })
+      if (args.json) { log(JSON.stringify(session, null, 2)); return }
+      log(`created studio session ${session.id} -> ${path.relative(repo, path.join(repo, '.collab', 'studio', session.id)).replaceAll('\\', '/')}`)
+      printSession(session)
+      log('下一步：agentline studio run --repo <path> --id ' + session.id)
+      return
+    }
+
+    if (sub === 'run') {
+      const adapterFactory = await studioAdapterFactory()
+      const r = await runStudioStep(repo, String(id), { config, adapterFactory, log })
+      if (args.json) { log(JSON.stringify({ id, step: r.step, session: r.session, questions: r.questions, decisions: r.decisions }, null, 2)); return }
+      log(`OK step=${r.step} status=${r.session.status} next=${currentStep(r.session)}`)
+      printSession(r.session)
+      const open = blockingQuestions(r.questions)
+      if (open.length) {
+        log(`awaiting_user: ${open.length} blocking question(s)`)
+        for (const q of open) log(`  ⏸ ${q.id} ${q.text}${q.default ? `（默认：${q.default}）` : ''}`)
+        log('下一步：agentline studio answer --repo <path> --id ' + id + ' --question <id> --text "..." | --default')
+      }
+      return
+    }
+
+    if (sub === 'answer') {
+      const r = answerStudio(repo, String(id), {
+        question: args.question,
+        decision: args.decision,
+        text: args.text || (args._[3] && !args.question && !args.decision ? String(args._[3]) : undefined),
+        adoptDefault: args.default === true,
+        channel: args.channel || 'cli',
+      })
+      if (args.json) { log(JSON.stringify({ id, session: r.session, questions: r.questions, decisions: r.decisions }, null, 2)); return }
+      log(`OK answer status=${r.session.status} next=${currentStep(r.session)}`)
+      printSession(r.session)
+      return
+    }
+
+    if (sub === 'conclude') {
+      const r = concludeStudio(repo, String(id))
+      if (args.json) { log(JSON.stringify({ id, ...r, session: r.session }, null, 2)); process.exit(r.pass ? 0 : 1) }
+      log(`G0 ${r.pass ? 'PASS' : 'FAIL'} (status=${r.status}) session=${r.session?.status || '-'}`)
+      for (const c of r.checks) log(`  ${c.pass ? '✓' : '✗'} ${c.id.padEnd(28)} ${c.desc}${c.pass ? '' : `  evidence=${c.evidence}`}`)
+      for (const e of r.errors || []) log(`  error: ${e}`)
+      if (!r.pass) log('G0 未通过：补齐证据后再运行 conclude（不会自动代用户或专家确认）')
+      process.exit(r.pass ? 0 : 1)
+    }
+  } catch (e) {
+    if (e instanceof StudioError) fail(e.message)
+    throw e
+  }
+}
+
 function help() {
   log(`agentline — 多模型协作调度器
 
@@ -570,6 +699,12 @@ function help() {
   node agentline.mjs answer --task <id> --text "..."
   node agentline.mjs inputs --task <id>
   node agentline.mjs status --task <id>
+  node agentline.mjs studio new --id <id> --title <标题> --input "<用户输入>"
+  node agentline.mjs studio run --id <id>              （每次只执行一个角色调用）
+  node agentline.mjs studio answer --id <id> --question <Q-1> --text "..." | --default
+  node agentline.mjs studio answer --id <id> --decision <D-1> --text "..." | --default
+  node agentline.mjs studio conclude --id <id>         （按落盘证据重新计算 G0）
+  node agentline.mjs studio status [--id <id>] [--json]
 
 公共参数：
   --repo <path>      目标仓库（默认当前目录）
@@ -596,6 +731,7 @@ switch (cmd) {
   case 'input': cmdInput(); break
   case 'answer': cmdAnswer(); break
   case 'inputs': cmdInputs(); break
+  case 'studio': await cmdStudio(); break
   case 'help': case '--help': case undefined: help(); break
   default: help(); process.exit(2)
 }
