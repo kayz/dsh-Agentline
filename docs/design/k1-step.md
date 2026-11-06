@@ -1,6 +1,6 @@
 # K1 Step Executor（P4）
 
-状态：P4.1 单步执行器 + P4.2 worktree/lock/capacity/step ledger 已完成；P4.3 输入账本/终止证明仍待接
+状态：P4.1 单步执行器 + P4.2 worktree/lock/capacity/step ledger + P4.3 输入账本/终止证明/调用证据 已完成
 日期：2026-11-06
 
 ## 已完成
@@ -24,13 +24,13 @@
   - worktree + task lock + step ledger
 - 未改 `flow.mjs` 旧语义；`runFlow` 仍是完整 Build 入口。
 
-## P4.3 待接
+## P4.3 已完成
 
-1. 输入账本（`inputs.ledger.jsonl` / 确定性 note）进入 `runStep`；
-2. 终止证明（tree guard）进入 `runBuild` 的 resume 判定；
-3. `call.archive` / `call.end` 逐调用证据；
-4. 失败/取消/恢复的单一恢复结果；
-5. 插件侧 `build step` 状态展示。
+1. 输入账本：`input-ledger.jsonl`，`input.append` / `input.consume` 带 content hash；
+2. 终止证明：`runBuild` 对 `blocked(interrupted)` 只在 `proven_dead` 时恢复；否则 `termination_unknown`；
+3. 调用证据：`step.end` 记录 model/run_ref；`executeRole` 的 run.json 仍是逐调用记录；
+4. 失败/取消/恢复：无法证明终止就不恢复，不自动重放；
+5. `inputs.mjs` 已写入 input ledger（append/consume）。
 
 ## 使用边界
 

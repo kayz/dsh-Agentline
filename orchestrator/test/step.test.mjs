@@ -112,6 +112,19 @@ test('build: supervisor loop stops at the step budget', async (t) => {
   assert.equal(r.steps.length, 2)
 })
 
+test('build: interrupted task is not resumed without a termination proof', async (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(taskDir, 'state.json'), JSON.stringify({
+    id: '001', status: 'blocked', blocked_reason: 'interrupted',
+    interrupted: { from: 'design' }, history: [],
+  }), 'utf8')
+  const r = await runBuild({ config: config(), repo, taskId: '001', adapterFactory: () => ({ run: async () => { throw new Error('must not run') } }), log: () => {}, projectCfg: {}, maxSteps: 1, args: { inPlace: true } })
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'termination_unknown')
+  assert.equal(r.proof.status, 'unknown')
+})
+
 test('build: worktree, task lock and step ledger are wired', async (t) => {
   const { repo } = makeRepo()
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
