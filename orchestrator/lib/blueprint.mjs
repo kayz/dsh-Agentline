@@ -151,6 +151,8 @@ function digestSet(dir, session, repo) {
     design_digest: hashEntries(DESIGN_FILES.map(entry)),
     graph_digest: hashEntries([entry('task-graph.json')]),
     strategy_digest: hashEntries(STRATEGY_FILES.map(entry)),
+    // 评审读过 testability.json。摘要盖住这份落盘，blocker 一改就和旧评审对不上。
+    testability_digest: hashEntries([entry('testability.json')]),
     gate_hash: g0.content_hash || null,
   }
 }
@@ -939,6 +941,7 @@ function applyReview(repo, dir, session, round, result) {
       design_digest: digests.design_digest,
       graph_digest: digests.graph_digest,
       strategy_digest: digests.strategy_digest,
+      testability_digest: digests.testability_digest,
       gate_hash: digests.gate_hash,
     },
     model_output_sha256: sha256Content(result.text),
@@ -988,6 +991,19 @@ function digestsMatch(stored, current, keys) {
     if (!stored[k] || stored[k] !== current[k]) stale.push(k)
   }
   return stale
+}
+
+/** 当前轮的三步都要有成功调用。只做完 design 时，上一轮的评审和测试架构不能算本轮证据。 */
+function missingRoundSteps(session) {
+  const round = session && session.round && session.round.current
+  if (!Number.isInteger(round)) return ['round']
+  const calls = Array.isArray(session.calls) ? session.calls : []
+  const missing = []
+  for (const phase of ['design', 'testability', 'review']) {
+    const step = `r${round}.${phase}`
+    if (!calls.some((c) => c && c.ok === true && c.step === step)) missing.push(`step:${step}`)
+  }
+  return missing
 }
 
 function graphProblems(graph) {
@@ -1131,15 +1147,30 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
   const reviews = r.reviews || []
   const last = reviews.length ? reviews[reviews.length - 1] : null
   const reviewRounds = listReviewFiles(dir).map((m) => m.round)
-  const roundsOk = Number.isInteger(session.round?.current) && session.round.current >= 1
-    && session.round.current <= ROUND_LIMIT && reviewRounds.every((n) => n <= ROUND_LIMIT)
-  const reviewStale = last ? digestsMatch(last.value && last.value.input_digests, digests, ['design_digest', 'graph_digest', 'strategy_digest', 'gate_hash']) : ['review:missing']
+  const currentRound = session.round && session.round.current
+  const roundsOk = Number.isInteger(currentRound) && currentRound >= 1
+    && currentRound <= ROUND_LIMIT && reviewRounds.every((n) => n <= ROUND_LIMIT)
+  // 最后一份评审和 testability.json 都必须是当前轮的产物，而且这一轮三步都已完成。
+  // 新一轮 design 写回相同内容时，上一轮摘要仍可能对得上，但不能据此批准。
+  const reviewValueRound = last && last.value && last.value.round
+  const reviewForCurrent = Number.isInteger(currentRound) && last && last.round === currentRound && reviewValueRound === currentRound
+  const missingSteps = missingRoundSteps(session)
+  const reviewKeys = ['design_digest', 'graph_digest', 'strategy_digest', 'testability_digest', 'gate_hash']
+  let reviewStale
+  if (!last) reviewStale = ['review:missing']
+  else if (!reviewForCurrent) reviewStale = ['round']
+  else if (missingSteps.length) reviewStale = missingSteps
+  else reviewStale = digestsMatch(last.value && last.value.input_digests, digests, reviewKeys)
   const blocking = last ? unresolvedBlocking(last.value && last.value.findings) : ['review:missing']
   const verdictPass = !!(last && last.value && last.value.verdict === 'pass')
   const reviewOk = verdictPass && blocking.length === 0 && reviewStale.length === 0
-  const tbStale = digestsMatch(r.testability && r.testability.input_digests, digests, ['design_digest', 'graph_digest', 'strategy_digest'])
-  const blockers = openBlockers(r.testability)
-  const testOk = blockers.length === 0 && tbStale.length === 0
+  const tbForCurrent = !!(r.testability && Number.isInteger(currentRound) && r.testability.round === currentRound)
+  let tbStale
+  if (!tbForCurrent) tbStale = ['round']
+  else if (missingSteps.length) tbStale = missingSteps
+  else tbStale = digestsMatch(r.testability.input_digests, digests, ['design_digest', 'graph_digest', 'strategy_digest'])
+  const blockers = tbForCurrent ? openBlockers(r.testability) : []
+  const testOk = tbForCurrent && blockers.length === 0 && tbStale.length === 0
   const lock = r.rolesLock
   const cDesign = candidateOf(lock, 'designer')
   const cReview = candidateOf(lock, 'reviewer')

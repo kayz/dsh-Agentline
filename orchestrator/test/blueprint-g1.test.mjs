@@ -158,7 +158,7 @@ function setup() {
     '--repo', repo, '--config', base, '--local', local, '--models', models,
     '--adapter-module', adapterModule,
   ], { encoding: 'utf8', env: { ...process.env, BLUEPRINT_FIXTURE: fixtureCfg } })
-  return { root, repo, run }
+  return { root, repo, run, fixtureCfg }
 }
 
 function drive(ctx, id, fromStudio) {
@@ -196,9 +196,16 @@ function refresh(repo, id) {
     strategy_digest: digests.strategy_digest,
   }
   writeJson(path.join(dir, 'testability.json'), tb)
+  const bound = currentDigests(repo, id)
   const reviewPath = path.join(dir, 'review-v1.verdict.json')
   const review = readJson(reviewPath)
-  review.input_digests = { ...tb.input_digests, gate_hash: digests.gate_hash }
+  review.input_digests = {
+    design_digest: bound.design_digest,
+    graph_digest: bound.graph_digest,
+    strategy_digest: bound.strategy_digest,
+    testability_digest: bound.testability_digest,
+    gate_hash: bound.gate_hash,
+  }
   writeJson(reviewPath, review)
 }
 
@@ -420,6 +427,7 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     const tb = readJson(file)
     tb.blockers.push({ id: 'TB-1', status: 'open', text: '还不能测' })
     writeJson(file, tb)
+    refresh(ctx.repo, id)
     const g = evaluateG1(ctx.repo, id)
     assert.equal(check(g, 'G1.testability_clear').pass, false)
     assert.match(check(g, 'G1.testability_clear').evidence, /TB-1/)
@@ -434,6 +442,7 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     tb.blockers = [{ status: 'resolved' }, { id: '   ', status: 'resolved', text: '空白编号' }, { id: 'TB-2', status: 'resolved', text: '   ' }]
     writeJson(file, tb)
     assert.deepEqual(readJson(file).input_digests, digests)
+    refresh(ctx.repo, id)
     const g = evaluateG1(ctx.repo, id)
     assert.equal(check(g, 'G1.testability_clear').pass, false)
     assert.match(check(g, 'G1.testability_clear').evidence, /blocker:invalid/)
@@ -453,6 +462,7 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     const ok = readJson(okFile)
     ok.blockers = [{ id: 'TB-9', status: 'resolved', text: '已经可测' }]
     writeJson(okFile, ok)
+    refresh(ctx.repo, okId)
     const okG = evaluateG1(ctx.repo, okId)
     assert.equal(check(okG, 'G1.testability_clear').pass, true)
   })
@@ -504,10 +514,29 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     const review = readJson(path.join(dir, 'review-v1.verdict.json'))
     review.round = 4
     writeJson(path.join(dir, 'review-v4.verdict.json'), review)
+    const statePath = path.join(dir, 'state.json')
+    const state = readJson(statePath)
+    state.round.current = 4
+    const clone = (phase) => {
+      const src = state.calls.find((c) => c.ok && c.step === `r1.${phase}`)
+      return { ...src, step: `r4.${phase}` }
+    }
+    state.calls = [...state.calls, clone('design'), clone('testability'), clone('review')]
+    writeJson(statePath, state)
+    const tb = readJson(path.join(dir, 'testability.json'))
+    tb.round = 4
+    writeJson(path.join(dir, 'testability.json'), tb)
+    const bound = currentDigests(ctx.repo, id)
+    review.input_digests = {
+      ...review.input_digests,
+      testability_digest: bound.testability_digest,
+    }
+    writeJson(path.join(dir, 'review-v4.verdict.json'), review)
     const g = evaluateG1(ctx.repo, id)
     assert.equal(check(g, 'G1.rounds_within_limit').pass, false)
     assert.match(check(g, 'G1.rounds_within_limit').evidence, /4/)
     assert.equal(check(g, 'G1.review_pass').pass, true)
+    assert.equal(check(g, 'G1.testability_clear').pass, true)
   })
 
   await t.test('a task without a title fails task fields after digests are refreshed', () => {
@@ -652,5 +681,102 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     assert.equal(g.pass, false)
     assert.equal(g.checks_pass, true)
     for (const name of CHECKS) assert.equal(check(g, name).pass, true, name)
+  })
+
+  await t.test('a new round that has only finished design cannot reuse the previous review', () => {
+    const id = branch(ctx.repo, 'base', 'half')
+    const dir = sessionDir(ctx.repo, id)
+    const statePath = path.join(dir, 'state.json')
+    const state = readJson(statePath)
+    state.round.current = 2
+    state.phase = 'testability'
+    state.status = 'running'
+    state.awaiting = null
+    const designCall = state.calls.find((c) => c.ok && c.step === 'r1.design')
+    state.calls = [...state.calls, { ...designCall, step: 'r2.design' }]
+    writeJson(statePath, state)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.review_pass').pass, false)
+    assert.match(check(g, 'G1.review_pass').evidence, /stale_evidence:round/)
+    assert.equal(check(g, 'G1.testability_clear').pass, false)
+    assert.match(check(g, 'G1.testability_clear').evidence, /stale_evidence:round/)
+    assert.equal(g.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '新一轮没走完也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.review_pass|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+  })
+
+  await t.test('resolving an open blocker the review already saw still requires a new review', () => {
+    const open = [{ id: 'TB-1', status: 'open', text: '还不能测' }]
+    const responses = (blockers) => ({
+      designer: '# 设计\n\n范围：Blueprint 控制面。\n\n' + JSON.stringify({
+        interfaces: '# 接口\n\nagentline blueprint\n',
+        risks: '# 风险\n\n批准哈希失效\n',
+        task_graph: GRAPH,
+      }),
+      test_architect: JSON.stringify({ strategy: '# 策略\n\n按任务层级验证。\n', blockers }),
+      reviewer: JSON.stringify({ verdict: 'pass', findings: [] }),
+    })
+    writeJson(ctx.fixtureCfg, { responses: responses(open) })
+    try {
+      drive(ctx, 'rebind', 'src')
+      const dir = sessionDir(ctx.repo, 'rebind')
+      const seen = evaluateG1(ctx.repo, 'rebind')
+      assert.equal(check(seen, 'G1.review_pass').pass, true)
+      assert.equal(check(seen, 'G1.testability_clear').pass, false)
+      assert.match(check(seen, 'G1.testability_clear').evidence, /TB-1/)
+      const review = readJson(path.join(dir, 'review-v1.verdict.json'))
+      assert.equal(review.input_digests.testability_digest, currentDigests(ctx.repo, 'rebind').testability_digest)
+      const tbPath = path.join(dir, 'testability.json')
+      const tb = readJson(tbPath)
+      tb.blockers = [{ id: 'TB-1', status: 'resolved', text: '还不能测' }]
+      writeJson(tbPath, tb)
+      const g = evaluateG1(ctx.repo, 'rebind')
+      assert.equal(check(g, 'G1.testability_clear').pass, true)
+      assert.equal(check(g, 'G1.review_pass').pass, false)
+      assert.match(check(g, 'G1.review_pass').evidence, /stale_evidence:testability_digest/)
+      assert.equal(g.checks_pass, false)
+      const approved = ctx.run(['approve', '--id', 'rebind', '--text', '改完 blocker 就批准'])
+      assert.notEqual(approved.status, 0)
+      assert.match(approved.stderr, /G1\.review_pass|not ready/)
+      const mat = ctx.run(['materialize', '--id', 'rebind'])
+      assert.notEqual(mat.status, 0)
+      assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+
+      writeJson(ctx.fixtureCfg, { responses: responses([]) })
+      for (const step of ['run', 'run', 'review']) {
+        const r = ctx.run([step, '--id', 'rebind'])
+        assert.equal(r.status, 0, step + '\n' + r.stderr + '\n' + r.stdout)
+      }
+      const again = evaluateG1(ctx.repo, 'rebind')
+      assert.equal(check(again, 'G1.review_pass').pass, true)
+      assert.equal(check(again, 'G1.testability_clear').pass, true)
+      assert.equal(again.checks_pass, true)
+      const review2 = readJson(path.join(dir, 'review-v2.verdict.json'))
+      assert.equal(review2.round, 2)
+      assert.equal(review2.input_digests.testability_digest, currentDigests(ctx.repo, 'rebind').testability_digest)
+      const ok = ctx.run(['approve', '--id', 'rebind', '--text', '重新评审后再批准'])
+      assert.equal(ok.status, 0, ok.stderr + ok.stdout)
+      const done = ctx.run(['materialize', '--id', 'rebind'])
+      assert.equal(done.status, 0, done.stderr + done.stdout)
+      const brief = fs.readFileSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md'), 'utf8')
+      assert.match(brief, /插件语法检查输出 AC-1 OK/)
+      assert.match(brief, /node --check orchestrator\/lib\/blueprint\.mjs/)
+    } finally {
+      writeJson(ctx.fixtureCfg, {
+        responses: {
+          designer: '# 设计\n\n范围：Blueprint 控制面。\n\n' + JSON.stringify({
+            interfaces: '# 接口\n\nagentline blueprint\n',
+            risks: '# 风险\n\n批准哈希失效\n',
+            task_graph: GRAPH,
+          }),
+          test_architect: JSON.stringify({ strategy: '# 策略\n\n按任务层级验证。\n', blockers: [] }),
+          reviewer: JSON.stringify({ verdict: 'pass', findings: [] }),
+        },
+      })
+    }
   })
 })
