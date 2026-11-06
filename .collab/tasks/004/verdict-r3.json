@@ -1,0 +1,14 @@
+{
+  "verdict": "pass",
+  "git_sha": "e39f765c376c2a945dcfff86129779d1518c0b2c",
+  "passed": 5,
+  "total": 5,
+  "findings": [],
+  "results": [
+    {"id":"AC-1","pass":true,"evidence":".collab/tasks/004/ci-results.json AC-1：exitCode 0，AC-1 OK"},
+    {"id":"AC-2","pass":true,"evidence":"ci-results.json AC-2：exitCode 0，AC-2 OK；orchestrator/test/blueprint-cli.test.mjs:224,267,314,365,386,464；orchestrator/agentline.mjs:726-743"},
+    {"id":"AC-3","pass":true,"evidence":"ci-results.json AC-3：exitCode 0，AC-3 OK；orchestrator/test/blueprint-g1.test.mjs:250-925；orchestrator/lib/blueprint.mjs:1084-1187,1207-1316"},
+    {"id":"AC-4","pass":true,"evidence":"ci-results.json AC-4：exitCode 0，AC-4 OK；plugin/test/blueprint-ui.test.mjs:435-652"},
+    {"id":"AC-5","pass":true,"evidence":"ci-results.json AC-5：exitCode 0，orchestrator 164 项及插件 17 项通过，AC-5 OK"}
+  ]
+}
