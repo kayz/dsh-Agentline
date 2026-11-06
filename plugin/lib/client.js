@@ -490,7 +490,6 @@ window.__ModuleLoader__.load({
           const exists = wanted && list.some((x) => x.path === wanted)
           const target = focus && exists ? focus : (view.current.project || (exists ? wanted : (p.default || (list[0] && list[0].path) || null)))
           if (target !== view.current.project) switchProject(target)
-          else if (target) { loadRouting(target); loadPipeline(target); loadList(target) }
           if (focusTaskId) { setPendingFocus({ project: target, task: focusTaskId }); setTab('build') }
         }
       }
