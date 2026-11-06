@@ -16,6 +16,7 @@ import { ensureTaskWorktree } from './worktree.mjs'
 import { acquireTaskLock, releaseTaskLock, acquireCapacity, releaseCapacity } from './registry.mjs'
 import { readWriteScope } from './scope.mjs'
 import { proveTermination } from './contracts/termination.mjs'
+import { getAdapter } from './adapters/index.mjs'
 import { configForStage, inspectOrigin, isInfraResult, recordStepStats, resolveStageRole } from './build.mjs'
 
 export const STEP_ORDER = ['design', 'dev', 'ci', 'review', 'pr']
@@ -67,7 +68,7 @@ function identityGroup(config, modelId) {
 }
 
 function wrapFactory(adapterFactory, { lock, onCall }) {
-  const base = adapterFactory || (() => null)
+  const base = typeof adapterFactory === 'function' ? adapterFactory : (provider) => getAdapter(provider)
   return (provider) => {
     const adapter = base(provider)
     if (!adapter || typeof adapter.run !== 'function') return adapter

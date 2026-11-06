@@ -164,3 +164,25 @@ T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pa
 | AC-5 `node --test orchestrator/test/build-roles.test.mjs` | 4 通过 |
 | AC-6 `node --test plugin/test/build-ui.test.mjs` | 7 通过。未提交产品改动后刷新，CI 和评审显示过期；`[]`、`null`、字符串三种 `state.json` 显示「state.json 损坏」，不显示未知状态 |
 | AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 185 通过；插件 24 通过 |
+
+## 真实 CLI 使用默认适配器
+
+评审指出：`agentline build step` / `build run` 没有把适配器交给 `runStep` / `runBuild`。`wrapFactory` 在缺省时换成了始终返回 `null` 的函数，再把这个函数传给 `executeRole`，于是 `executeRole` 自己的 `getAdapter` 回退不会执行。模型候选被当成没有适配器跳过，真实入口跑不了设计、开发和评审，也到不了 `pr_open`。注入桩工厂的测试盖不住这条路径。
+
+这次只补默认适配器，锁和身份记录仍走原来的包装：
+
+- `wrapFactory` 在调用方没有传入工厂时，改为 `(provider) => getAdapter(provider)`。返回的适配器仍先核对角色锁，再把适配器给出的 `modelResolved` 写入 `step-ledger.jsonl`。身份缺失或不符时，这一步仍然失败，不推进。
+- `build step` 和 `build run` 显式传入同一个 `getAdapter`。没有 `--adapter-module` 时，CLI 用的就是已注册的适配器，不再落到空工厂。
+
+`build-execution.test.mjs` 增加两条，都不用测试里的桩工厂：
+
+- 直接调用 `runStep` 且不传 `adapterFactory`。提供方配置为 `claude-cli`，命令指向临时目录里的确定性脚本。锁内只调用 `model-a`；账本和 `run.json` 的 `model_resolved` 来自脚本 stdout 的 `modelUsage`，`model_resolved_source` 为 `adapter`。
+- 真实 `agentline.mjs build step`：脚本回报另一个模型时，请求仍是锁内的 `model-a`，不会改叫别的模型；账本记 `model-b`，`T.isolation` 为 `fail:mismatch`，状态不到 `designed`。`agentline.mjs build run` 不注入工厂，沿默认适配器跑到 `pr_open`；三次物理调用分别是 `model-a`、`model-a`、`model-b`，身份与请求一致，隔离证据为 `pass`。
+
+这一轮自测：
+
+| 验收 | 结果 |
+|---|---|
+| AC-1 `node --check` 三个入口 | 退出码 0，输出 `AC-1 OK` |
+| AC-2 至 AC-6 | 含在下面的 orchestrator 与插件全量里，通过。`build-execution` 新增的默认适配器与真实 CLI 两条通过 |
+| AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 187 通过；插件 24 通过，输出 `AC-7 OK` |
