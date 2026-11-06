@@ -1,65 +1,55 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "75f4d54a896bc61a145328b169a901294bf1fcb7",
-  "passed": 3,
+  "git_sha": "f59b95b26a6a96d3f38832db22890ee47636c2fd",
+  "passed": 4,
   "total": 7,
   "findings": [
     {
       "severity": "P1",
-      "description": "未知副作用仍可在当前步骤自动重放：网络错误立即重试，其他错误可切换候选，状态标记在步骤结束后才写入。",
-      "evidence": "orchestrator/lib/step.mjs:82-90,320-324；orchestrator/lib/exec.mjs:146-154,221-248；orchestrator/lib/build.mjs:277-295"
+      "description": "损坏来源 JSON 仅含 kind: legacy 时绕过来源验证并允许模型调用。",
+      "evidence": "orchestrator/lib/build.mjs:193-201; orchestrator/lib/step.mjs:108-115; orchestrator/test/build-source.test.mjs:314-322"
     },
     {
       "severity": "P1",
-      "description": "自洽但缺少必要验收结果的 CI 报告可通过；缺少 ranAt 或无法读取 HEAD 时间也沿用通过结果，无法证明新鲜度。",
-      "evidence": "orchestrator/lib/build.mjs:357-374,387-394；orchestrator/test/build-gate.test.mjs:72-75"
-    },
-    {
-      "severity": "P1",
-      "description": "失败或基础设施重试的物理调用缺少实际身份时被隔离检查忽略，可随其他调用一起通过。",
-      "evidence": "orchestrator/lib/build.mjs:481-508；orchestrator/test/build-roles.test.mjs:160-163,200-214"
-    },
-    {
-      "severity": "P2",
-      "description": "节点变更、批准撤销或过期时，失效的 Blueprint 来源被投影为旧任务。",
-      "evidence": "orchestrator/lib/build.mjs:215-241,651-656；plugin/test/build-ui.test.mjs:479-510"
+      "description": "修改 acceptance.md 命令而保留 ID 时，旧 CI 报告仍可通过新鲜度检查。",
+      "evidence": "orchestrator/lib/build.mjs:371-412,432-438,455-480; orchestrator/test/build-gate.test.mjs:217-230"
     }
   ],
   "results": [
     {
       "id": "AC-1",
       "pass": true,
-      "evidence": "ci-results.json AC-1：exitCode 0，AC-1 OK"
+      "evidence": "ci-results.json AC-1 exitCode 0, AC-1 OK"
     },
     {
       "id": "AC-2",
-      "pass": true,
-      "evidence": "ci-results.json AC-2：exitCode 0，3 项通过；orchestrator/test/build-source.test.mjs:233-246,258-274,291-320,326-330；orchestrator/lib/build.mjs:183-241"
+      "pass": false,
+      "evidence": "CI exitCode 0, 3 项通过；build.mjs:193-201; step.mjs:108-115 来源损坏可绕过"
     },
     {
       "id": "AC-3",
-      "pass": false,
-      "evidence": "ci-results.json AC-3：exitCode 0，3 项通过；step.mjs:82-90 和 exec.mjs:146-154,221-248 存在未知副作用重放缺口"
+      "pass": true,
+      "evidence": "CI exitCode 0, 4 项通过；build-execution.test.mjs:76,92,135,181"
     },
     {
       "id": "AC-4",
       "pass": false,
-      "evidence": "ci-results.json AC-4：exitCode 0，4 项通过；build.mjs:357-374,387-394 未确认全部必要项及新鲜度"
+      "evidence": "CI exitCode 0, 5 项通过；build.mjs:371-412,432-438,455-480 旧报告未绑定验收命令"
     },
     {
       "id": "AC-5",
-      "pass": false,
-      "evidence": "ci-results.json AC-5：exitCode 0，3 项通过；build.mjs:481-508 忽略有错误的调用缺失身份"
+      "pass": true,
+      "evidence": "CI exitCode 0, 4 项通过；step.mjs:69-97,125-156; build.mjs:611-639"
     },
     {
       "id": "AC-6",
       "pass": false,
-      "evidence": "ci-results.json AC-6：exitCode 0；plugin/test/build-ui.test.mjs:437-562；build.mjs:215-241,651-656 将失效 Blueprint 来源显示为 legacy"
+      "evidence": "CI exitCode 0, 3 项通过；build.mjs:729-788 投影受上述缺陷影响的来源与 gate"
     },
     {
       "id": "AC-7",
       "pass": true,
-      "evidence": "ci-results.json AC-7：exitCode 0，orchestrator 177 项及插件 20 项通过，AC-7 OK"
+      "evidence": "CI exitCode 0；orchestrator 180 项和插件 20 项通过，AC-7 OK"
     }
   ]
 }
