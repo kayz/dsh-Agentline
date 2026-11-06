@@ -16,6 +16,7 @@ import path from 'node:path'
 import { getAdapter } from './adapters/index.mjs'
 import { clampEffort } from './exec.mjs'
 import { GATE_SCHEMA, evaluateGate, sha256Content } from './contracts/gate.mjs'
+import { isRoleEligible, normalizeModel } from './model-catalog.mjs'
 
 export const STUDIO_DIR = '.collab/studio'
 export const STUDIO_ROLES = ['expert_a', 'expert_b', 'expert_c', 'moderator', 'scribe']
@@ -24,8 +25,8 @@ export const STEPS = ['expert_a', 'expert_b', 'expert_c', 'moderator', 'scribe',
 export const CONFIRM_TARGET = { confirm_a: 'expert_a', confirm_b: 'expert_b', confirm_c: 'expert_c' }
 
 /**
- * 轮次上限只约束“讨论轮次”：专家/主持/书记会开启新一轮讨论，
- * 确认步骤只是对已落盘证据的独立表态，不产生新一轮，因此不受上限限制。
+ * 轮次恰好为 2 时，确认步骤只是对已落盘证据的独立表态，不产生新一轮。
+ * 轮次已经超过 2，或无法证明仍有额度时，确认也不再执行。
  */
 function isConfirmStep(step) { return !!CONFIRM_TARGET[step] }
 
@@ -160,6 +161,34 @@ function tierOk(role, model) {
 }
 
 /**
+ * 角色资格与目录一致：必须 callable，身份必须 verified，档位必须满足。
+ * discovered / unknown / unverified 以及未验证身份都不能担任 Studio 角色。
+ * 书记允许 advanced 或 top；专家与主持只允许 top。
+ */
+function eligibilityFor(role, key, model) {
+  const entry = normalizeModel({
+    key,
+    provider: model?.provider,
+    id: model?.id || key,
+    tier: model?.tier,
+    identity: model?.identity,
+    availability: model?.availability,
+    source: model?.source,
+  })
+  if (role === 'scribe') {
+    const asAdvanced = isRoleEligible(entry, { tier: 'advanced' })
+    if (asAdvanced.ok) return asAdvanced
+    const asTop = isRoleEligible(entry, { tier: 'top' })
+    if (asTop.ok) return asTop
+    if (asAdvanced.reason === 'invalid' || asAdvanced.reason === 'identity_unverified' || String(asAdvanced.reason || '').startsWith('unavailable:')) {
+      return asAdvanced
+    }
+    return { ok: false, reason: `tier:${entry.tier || 'unknown'}, need advanced|top` }
+  }
+  return isRoleEligible(entry, { tier: TIER_REQUIRED[role] })
+}
+
+/**
  * 模型身份：以实际 model id 为准，配置键只是别名。
  * 两个不同键指向同一 provider/id 时仍是同一个模型，书记不能因此与主持重合。
  */
@@ -248,11 +277,8 @@ function resolveRoles(config, projectCfg, overrides = {}) {
     for (const key of keys) {
       const model = config.models?.[key]
       if (!model) { reasons.push(`${key}: unknown model`); continue }
-      if (!tierOk(role, model)) { reasons.push(`${key}: tier ${model.tier || 'unknown'}, need ${TIER_REQUIRED[role]}`); continue }
-      if (model.availability === 'blocked' || model.availability === 'unavailable') {
-        reasons.push(`${key}: availability ${model.availability}`)
-        continue
-      }
+      const eligible = eligibilityFor(role, key, model)
+      if (!eligible.ok) { reasons.push(`${key}: ${eligible.reason}`); continue }
       const provider = config.providers?.[model.provider]
       if (!provider) { reasons.push(`${key}: provider ${model.provider} not configured`); continue }
       // 无法保证只读的渠道不能静默执行；换下一个候选也不会让它变好，但别的候选可能可以。
@@ -654,6 +680,10 @@ async function callRole({ repo, dir, role, prompt, config, adapterFactory, log, 
   if (!assigned) throw new StudioError('E_ROLE_UNASSIGNED', `role ${role} has no assigned model`)
   const model = config.models?.[assigned.model]
   if (!model) throw new StudioError('E_MODEL_MISSING', `model ${assigned.model} is no longer configured`)
+  const eligible = eligibilityFor(role, assigned.model, model)
+  if (!eligible.ok) {
+    throw new StudioError('E_ROLE_INELIGIBLE', `studio role ${role} model ${assigned.model} is not eligible: ${eligible.reason}`)
+  }
   const providerCfg = config.providers?.[model.provider]
   if (!providerCfg) throw new StudioError('E_PROVIDER_MISSING', `provider ${model.provider} is not configured`)
   const provider = assertReadonlyProvider(providerCfg, model.provider)
@@ -792,18 +822,23 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     if (!ok) throw new StudioError('E_AWAITING_DECISION', 'all decisions must be confirmed (or default adopted) before conclude')
     throw new StudioError('E_NO_STEP', 'no further studio step; run "studio conclude"')
   }
-  // 轮次耗尽（2/2）时不能再开启新的讨论轮次，避免一次拒绝把轮次写成第 3 轮。
-  // rounds_used 缺失或不是整数时同样无法证明还有额度，一并拒绝。
-  // 确认步骤不开启新一轮：第二轮被拒绝的问题回答后旧确认已作废，
-  // 必须仍能由三位专家各自重新独立确认，否则会话永远无法完成。
-  const spent = r.decisions
-    .map((d) => ({ id: d.id, rounds: roundCount(d) }))
-    .filter((x) => x.rounds === null || x.rounds >= 2)
-  if (spent.length && !isConfirmStep(step)) {
+  // 轮次已经超过 2，或无法证明仍有额度：任何角色调用都不再发生，包括确认。
+  // 轮次恰好为 2：不能再开启讨论（专家/主持/书记），但本轮的独立确认仍可完成。
+  const counted = r.decisions.map((d) => ({ id: d.id, rounds: roundCount(d) }))
+  const beyond = counted.filter((x) => x.rounds === null || x.rounds > 2)
+  if (beyond.length) {
     throw new StudioError(
       'E_ROUNDS_EXHAUSTED',
-      `decision rounds exhausted (${spent.map((x) => `${x.id}:${x.rounds === null ? 'rounds_used invalid' : `${x.rounds}/2`}`).join(', ')}); ` +
+      `decision rounds exhausted (${beyond.map((x) => `${x.id}:${x.rounds === null ? 'rounds_used invalid' : `${x.rounds}/2`}`).join(', ')}); ` +
       'no further role call is made and G0 cannot pass — stop instead of starting another discussion round',
+    )
+  }
+  const atCap = counted.filter((x) => x.rounds >= 2)
+  if (atCap.length && !isConfirmStep(step)) {
+    throw new StudioError(
+      'E_ROUNDS_EXHAUSTED',
+      `decision rounds exhausted (${atCap.map((x) => `${x.id}:${x.rounds}/2`).join(', ')}); ` +
+      'no further discussion round is started',
     )
   }
 
@@ -881,17 +916,24 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     writeJson(path.join(dir, 'confirmations', `${providerRole}.json`), record)
     if (verdict === 'reject') {
       reject = record
-      // 一次拒绝 = 一轮新的业务轮次，但 2 轮是硬上限：
-      //   - 讨论步骤在轮次耗尽时已被拦住，拒绝最多把 1 记到 2；
-      //   - 确认步骤在轮次耗尽后仍允许（否则回答后无法重新确认），此时拒绝只能作为
-      //     阻塞证据留下，绝不把 rounds_used 写成第 3 轮；
+      // 一次拒绝 = 一轮新的业务轮次，如实累加，不再封顶成 2：
+      //   - 决策还不到 2 时，问题 rounds_used 保持 0 且不关联决策，用户仍可回答本轮；
+      //   - 决策已经是 2（或轮次无法证明）时，这次拒绝就是超出上限的证据，
+      //     rounds_used 写成 used+1（第 3 轮可见），问题关联到决策且轮次 > 2，
+      //     文本回答会被拒绝，确认也不再继续。
       //   - rounds_used 本身无效时保持无效，由 G0 判失败，不用新值掩盖坏证据。
+      const priorCounts = decisions.map((d) => roundCount(d))
+      const opensAnotherRound = priorCounts.some((n) => n === null || n >= 2)
       decisions = decisions.map((d) => {
         const used = roundCount(d)
         if (used === null) return d
-        return { ...d, rounds_used: Math.min(used + 1, 2) }
+        return { ...d, rounds_used: used + 1 }
       })
       writeJson(path.join(dir, 'decisions.json'), decisions)
+      const nextRound = decisions.reduce((max, d) => {
+        const n = roundCount(d)
+        return n === null ? max : Math.max(max, n)
+      }, 0)
       questions = [...r.questions, {
         id: nextQuestionId(r.questions),
         text: `专家 ${ROLE_LABEL[providerRole]} 拒绝：${record.notes || '未说明原因'}`,
@@ -900,8 +942,9 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
         default: null,
         kind: 'expert_reject',
         expert: providerRole,
+        decision: opensAnotherRound ? (decisions[0]?.id || null) : null,
         status: 'open',
-        rounds_used: 0,
+        rounds_used: opensAnotherRound ? (nextRound > 2 ? nextRound : null) : 0,
         user_action: null,
         created_at: nowIso(),
       }]
@@ -974,6 +1017,16 @@ export function answerStudio(repo, id, { question, decision, text, adoptDefault 
       throw new StudioError('E_ROUNDS_INVALID', `question ${question} has invalid rounds_used; only --default can resolve it`)
     }
     const rounds = Math.max(qRounds ?? 0, linkRounds ?? 0)
+    const decisionOver = decisions.some((d) => {
+      const n = roundCount(d)
+      return n !== null && n > 2
+    })
+    if (!adoptDefault && decisionOver) {
+      throw new StudioError(
+        'E_ROUNDS_EXHAUSTED',
+        `question ${question} cannot start another discussion: decision rounds already exceed 2`,
+      )
+    }
     if (!adoptDefault && rounds >= 2) {
       throw new StudioError('E_ROUND_LIMIT', `question ${question} already used ${rounds}/2 rounds; answer with --default or resolve it without another discussion round`)
     }

@@ -110,11 +110,11 @@ function setup() {
       },
     },
     models: {
-      'top-a': { provider: 'claude', id: 'top-a', tier: 'top', availability: 'callable' },
-      'top-b': { provider: 'claude', id: 'top-b', tier: 'top', availability: 'callable' },
-      'top-c': { provider: 'claude', id: 'top-c', tier: 'top', availability: 'callable' },
-      'top-d': { provider: 'claude', id: 'top-d', tier: 'top', availability: 'callable' },
-      'adv-s': { provider: 'claude', id: 'adv-s', tier: 'advanced', availability: 'callable' },
+      'top-a': { provider: 'claude', id: 'top-a', tier: 'top', availability: 'callable', identity: 'verified' },
+      'top-b': { provider: 'claude', id: 'top-b', tier: 'top', availability: 'callable', identity: 'verified' },
+      'top-c': { provider: 'claude', id: 'top-c', tier: 'top', availability: 'callable', identity: 'verified' },
+      'top-d': { provider: 'claude', id: 'top-d', tier: 'top', availability: 'callable', identity: 'verified' },
+      'adv-s': { provider: 'claude', id: 'adv-s', tier: 'advanced', availability: 'callable', identity: 'verified' },
     },
     roles: {
       design: { candidates: [], effort: 'high' },
@@ -412,10 +412,15 @@ test('studio cli: two rounds are the hard cap and a third discussion round is ne
   assert.equal(ctx.callsList().slice(-1)[0], 'confirm_a')
   assert.equal(ctx.callsList().length, before + 1)
 
-  // 轮次耗尽后再次拒绝只能作为阻塞证据留下，绝不写出第 3 轮
+  // 轮次耗尽后再次拒绝如实记成第 3 轮，不能封顶成 2 把后续讨论藏起来
   const rejectedAgain = ctx.run(['run', '--id', 's8'])
   assert.equal(rejectedAgain.status, 0, rejectedAgain.stderr || rejectedAgain.stdout)
-  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [3, 3])
+  const stuckQuestions = JSON.parse(fs.readFileSync(path.join(ctx.dir('s8'), 'questions.json'), 'utf8'))
+  const stuckQuestion = stuckQuestions[stuckQuestions.length - 1]
+  assert.equal(stuckQuestion.kind, 'expert_reject')
+  assert.equal(stuckQuestion.rounds_used, 3)
+  assert.equal(stuckQuestion.decision, 'D-1')
   const stuck = ctx.readSession('s8')
   assert.equal(stuck.status, 'awaiting_user')
   assert.equal(stuck.blocking_reason, 'expert_reject')
@@ -426,11 +431,21 @@ test('studio cli: two rounds are the hard cap and a third discussion round is ne
   assert.notEqual(blockedRun.status, 0)
   assert.match(blockedRun.stderr, /awaiting_user/)
   assert.equal(ctx.callsList().length, callsBeforeBlocked, '未回答阻塞问题前不能再调用角色')
-  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [3, 3])
+
+  // 文本回答不能再开启一轮确认；轮次保持 3，G0 必须看见超限
+  const answeredAgain = ctx.run(['answer', '--id', 's8', '--question', stuckQuestion.id, '--text', '再开一轮'])
+  assert.notEqual(answeredAgain.status, 0)
+  assert.match(answeredAgain.stderr, /round/)
+  assert.equal(ctx.callsList().length, callsBeforeBlocked, '被拒绝的回答不能触发新的角色调用')
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [3, 3])
+  const stillOpen = JSON.parse(fs.readFileSync(path.join(ctx.dir('s8'), 'questions.json'), 'utf8'))
+  assert.equal(stillOpen[stillOpen.length - 1].status, 'open')
 
   const failedG0 = ctx.run(['conclude', '--id', 's8'])
   assert.notEqual(failedG0.status, 0)
   assert.match(failedG0.stdout, /G0 FAIL/)
+  assert.match(failedG0.stdout, /G0\.decision_rounds_le_2/)
   assert.equal(ctx.readSession('s8').status, 'awaiting_user')
 })
 
@@ -483,14 +498,46 @@ test('studio cli: an answered second-round reject can still be re-confirmed and 
   assert.equal(ctx.readSession('s9').status, 'concluded')
 })
 
+test('studio cli: discovered, unknown, or unverified models cannot be studio roles', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  const cfg = JSON.parse(fs.readFileSync(ctx.base, 'utf8'))
+
+  const attempt = (id, patch, pattern) => {
+    const next = JSON.parse(JSON.stringify(cfg))
+    Object.assign(next.models['top-a'], patch)
+    fs.writeFileSync(ctx.base, JSON.stringify(next, null, 2), 'utf8')
+    const r = ctx.run(['new', '--id', id, '--title', 'x', '--input', '只读讨论'])
+    assert.notEqual(r.status, 0, `${id}: ${r.stdout}`)
+    assert.match(r.stderr, pattern, r.stderr || r.stdout)
+    assert.equal(fs.existsSync(ctx.dir(id)), false, `${id} must not create a session`)
+  }
+
+  attempt('disc', { availability: 'discovered', identity: 'verified' }, /unavailable:discovered/)
+  attempt('unk', { availability: 'unknown', identity: 'verified' }, /unavailable:unknown/)
+  attempt('unv', { availability: 'unverified', identity: 'verified' }, /unavailable:unverified/)
+  attempt('id', { availability: 'callable', identity: 'unverified' }, /identity_unverified/)
+  delete cfg.models['top-a'].identity
+  attempt('missing-id', { availability: 'callable' }, /identity_unverified/)
+
+  const fallback = JSON.parse(JSON.stringify(cfg))
+  fallback.models['top-a'].identity = 'verified'
+  fallback.models['bad-a'] = { provider: 'claude', id: 'bad-a', tier: 'top', availability: 'discovered', identity: 'unverified' }
+  fallback.studio.roles.expert_a = ['bad-a', 'top-a']
+  fs.writeFileSync(ctx.base, JSON.stringify(fallback, null, 2), 'utf8')
+  const ok = ctx.run(['new', '--id', 'ok-fallback', '--title', 'x', '--input', '只读讨论'])
+  assert.equal(ok.status, 0, ok.stderr || ok.stdout)
+  assert.equal(ctx.readSession('ok-fallback').roles.expert_a.model, 'top-a')
+})
+
 test('studio cli: scribe and moderator resolved to the same model id are refused', (t) => {
   const ctx = setup()
   t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
 
   const cfg = JSON.parse(fs.readFileSync(ctx.base, 'utf8'))
   // 两个不同的配置键指向同一个实际模型：仍是同一个模型，不能分饰书记与主持。
-  cfg.models['mod-main'] = { provider: 'claude', id: 'shared-model', tier: 'top', availability: 'callable' }
-  cfg.models['adv-alias'] = { provider: 'claude', id: 'shared-model', tier: 'advanced', availability: 'callable' }
+  cfg.models['mod-main'] = { provider: 'claude', id: 'shared-model', tier: 'top', availability: 'callable', identity: 'verified' }
+  cfg.models['adv-alias'] = { provider: 'claude', id: 'shared-model', tier: 'advanced', availability: 'callable', identity: 'verified' }
   cfg.studio.roles.moderator = ['mod-main']
   cfg.studio.roles.scribe = ['adv-alias']
   fs.writeFileSync(ctx.base, JSON.stringify(cfg, null, 2), 'utf8')

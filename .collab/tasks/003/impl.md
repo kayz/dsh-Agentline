@@ -62,16 +62,19 @@ expert_a → expert_b → expert_c → moderator → scribe → confirm_a → co
   `statusAfterStep` 只在全部决策都有用户动作后才把会话标成 `ready`。
 - 业务轮次：回答一次问题给该问题记 1 轮（若问题关联到某个决策，同时给该决策记 1 轮）；
   达到 2 轮后拒绝再开文本讨论轮次（`E_ROUND_LIMIT`），但允许显式采用默认。轮次不因失败/重试自增。
-  决策轮次用满 2/2 后，下一步若仍要开启讨论（专家/主持/书记）则 `run` 直接拒绝
-  （`E_ROUNDS_EXHAUSTED`），不再调用任何角色；确认步骤不开启新一轮，仍然可以执行。
-  轮次缺失或不是整数同样无法证明还有额度，讨论步骤一并拒绝，G0 对应 check 也失败。
-- 专家拒绝（`verdict=reject`）会写一条 `kind=expert_reject` 的阻塞问题，并给每个决策记 1 轮
-  （轮次用满后不再自增，绝不写第 3 轮）；
+  决策轮次恰好为 2 时，下一步若仍要开启讨论（专家/主持/书记）则 `run` 直接拒绝
+  （`E_ROUNDS_EXHAUSTED`）；本轮的确认步骤不产生新一轮，仍然可以执行。
+  决策轮次已经大于 2，或轮次缺失/不是整数时，讨论和确认都不再调用任何角色。
+  G0 的 `decision_rounds_le_2` 同样把缺失、非整数和大于 2 判为失败。
+- 专家拒绝（`verdict=reject`）会写一条 `kind=expert_reject` 的阻塞问题，并给每个有效决策的
+  `rounds_used` 加 1，不再封顶。决策还不到 2 时，新问题的 `rounds_used` 为 0 且不关联决策，
+  用户可以回答这一轮；回答后三位专家重新独立确认，确认本身不加轮次。
+  决策已经是 2 时，这次拒绝写成第 3 轮（例如 `[2,2]` → `[3,3]`），问题 `rounds_used` 记为该轮次
+  并关联到决策。文本回答被拒绝（`E_ROUNDS_EXHAUSTED`），不能再进入下一轮确认。
   同时**撤掉全部 `confirm_*` 步骤**并删除其他专家的确认文件（旧确认是对拒绝前证据的确认），
   纪要末尾追加「修订记录（第 N 轮）」写明拒绝原因；用户 `answer` 后，用户处理也追加到同一记录。
   确认提示词包含纪要、决策、以及全部问题与用户回答，所以三位专家是对**修订后的证据**重新独立确认。
-  每次拒绝都把轮次封顶在 2，绝不写出第 3 轮；轮次用满后若仍有阻塞问题就停在
-  `awaiting_user` 并呈现，不自动选默认；问题回答后，确认步骤仍可继续。
+  轮次用满后若仍有阻塞问题就停在 `awaiting_user` 并呈现，不自动选默认。
 
 ### G0
 
@@ -111,7 +114,10 @@ G0.scribe_ne_moderator  书记与主持模型均已知且不同
   也可用 `--expert-a/--expert-b/--expert-c/--moderator/--scribe` 显式覆盖。
 - 专家与主持要求 `tier=top`，书记允许 `top|advanced`；书记与主持必须是不同的实际模型
   （比较 provider + model id，配置键别名不能绕过）。
-  模型需要存在、provider 已配置，`availability` 不能是 `blocked/unavailable`。
+  资格与 `model-catalog.mjs` 的 `isRoleEligible` 一致：`availability` 必须是 `callable`，
+  `identity` 必须是 `verified`。`discovered` / `unknown` / `unverified`，以及 callable 但身份未验证
+  （或缺省身份）都会在 `new` 和后续角色调用时明确失败，不用下一个不可用候选冒充，也不用示例结果替代。
+  同一角色的候选列表里，不合格的会被跳过，后面合格的仍可选用。provider 必须已配置，且能强制只读。
 - 任一条件不满足都会给出明确错误，不会用示例结果冒充真实调用。
 - 只读：Studio 每次调用都用"只读 provider 副本"，把能强制只读的 adapter 钉死在只读模式
   （`claude-cli` → `permission-mode=plan` + 仅 `Read`；`codebuddy-cli` → `plan`；
@@ -296,6 +302,20 @@ Push-Location orchestrator; try { & npm test } finally { Pop-Location }
 - `node --test --test-name-pattern "two rounds are the hard cap" orchestrator/test/studio-cli.test.mjs`：1 通过。
 - `cd orchestrator && npm test`：108 通过，0 失败（含 studio-cli 与 studio-g0）。
 - `node --test plugin/test/studio-ui.test.mjs`：10 通过。空闲机器上 `settle` 只让出 10 个 `setTimeout(0)` 时，CLI 子进程还没写日志，`new / run / answer / conclude` 会读到 0 次调用；现改为等到进行中的 fetch 结束再断言。行为断言未改。
+
+## 第六轮修订（针对 review 的 2 条 P1）
+
+| finding | 原因 | 修正 |
+|---|---|---|
+| P1 轮次耗尽后仍能回答并继续确认 | 专家拒绝用 `Math.min(used + 1, 2)` 封顶；新建问题 `rounds_used` 为 0 且不关联决策，所以文本回答看不出决策已经用满。回答后确认步骤仍可跑，拒绝和回答可以反复发生，G0 却一直看到 2 | 拒绝改为如实 `used + 1`。决策已是 2 时写成 3，问题记同样的轮次并关联到决策。文本回答在决策轮次 `> 2` 时直接 `E_ROUNDS_EXHAUSTED`。`run` 在轮次 `> 2` 或轮次无效时不再调用任何角色，包括确认。恰好为 2 时仍只允许完成本轮确认 |
+| P1 未验证或不可调用的模型能当 Studio 角色 | `resolveRoles` 只排除 `blocked` / `unavailable`，`discovered`、`unknown`、`unverified` 和未验证身份都能过 | `new` 与角色调用都走 `isRoleEligible`：必须 `callable` 且 `identity=verified`，专家/主持档位为 top，书记为 advanced 或 top。不合格给出目录里的原因（`unavailable:*` / `identity_unverified` / `tier:*`），不创建会话 |
+
+自测（仓库根，均退出码 0）：
+
+- `node --check`：`plugin/lib/client.js`、`plugin/lib/index.js`、`orchestrator/agentline.mjs`、`orchestrator/lib/studio.mjs`。
+- `node --test orchestrator/test/studio-cli.test.mjs orchestrator/test/studio-g0.test.mjs`：36 通过，0 失败。其中「两轮是硬上限」在第三次拒绝后断言 `rounds_used` 为 `[3,3]`、问题关联 `D-1`、文本回答被拒绝且不再产生调用、`conclude` 失败在 `G0.decision_rounds_le_2`；第二轮回答后的重新确认仍可通过 G0。新增「discovered / unknown / unverified / 缺身份不能建会话，合格后备候选仍可用」。
+- `node --test plugin/test/studio-ui.test.mjs`：10 通过，0 失败。
+- `cd orchestrator && npm test`：109 通过，0 失败。
 
 ## 已知边界
 
