@@ -3,7 +3,7 @@
  * agentline — 多模型协作调度器（core）
  *
  *   node agentline.mjs init
- *   node agentline.mjs models discover|list|add
+ *   node agentline.mjs models discover|list|add|catalog
  *   node agentline.mjs roles show|set
  *   node agentline.mjs preflight
  *   node agentline.mjs run     --task 001 --role design [--repo <path>]
@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { loadConfig, loadProjectConfig, projectConfigPath, ROLES } from './lib/config.mjs'
 import { getAdapter } from './lib/adapters/index.mjs'
 import { discoverAll, saveDiscovery, discoverySummary, setRoleCandidates, addModel, formatModelTable } from './lib/models.mjs'
+import { buildCatalog } from './lib/model-catalog.mjs'
 import { effectiveRole, readProject } from './lib/routing.mjs'
 import { executeRole, readVerdict } from './lib/exec.mjs'
 import { readState, writeState, appendRun } from './lib/state.mjs'
@@ -137,6 +138,17 @@ async function cmdModels() {
   if (sub === 'list' || !sub) {
     if (!Object.keys(config.models).length) { log('(no models; run "agentline models discover")'); return }
     log(formatModelTable(config))
+    return
+  }
+  if (sub === 'catalog') {
+    const catalog = buildCatalog({ config })
+    if (args.json) log(JSON.stringify(catalog, null, 2))
+    else {
+      for (const m of catalog.models) {
+        log(`${m.key.padEnd(24)} ${m.provider.padEnd(10)} tier=${String(m.tier).padEnd(9)} availability=${String(m.availability).padEnd(11)} identity=${m.identity}`)
+      }
+      if (!catalog.models.length) log('(no models; run "agentline models discover" or "agentline models add ...")')
+    }
     return
   }
   if (sub === 'add') {
@@ -500,7 +512,7 @@ function help() {
 
 用法：
   node agentline.mjs init
-  node agentline.mjs models discover|list|add
+  node agentline.mjs models discover|list|add|catalog
   node agentline.mjs roles show|set
   node agentline.mjs preflight
   node agentline.mjs pipeline summary [--json]
