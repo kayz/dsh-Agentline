@@ -98,3 +98,51 @@ needs_revision；独立评审通过 **13/14**，AC-7 不通过，发现 1 个 P2
    规格依据：design.md:279 要求各区块错误隔离、下一次轮询或重新进入页面可恢复。项目列表请求失败不能冒充独立路由请求失败；本轮已加载路由及草稿都有效，错误提示却被另一个端点污染并持续残留。此结论来自只读控制流核对；CI 夹具不执行 effect，命令通过不能覆盖该路径。
 
    修复建议：让项目列表失败只更新自己的错误状态；路由错误由路由请求自身设置与清除。继续保留已加载标记对草稿和在途保存反馈的保护，不回退到正常轮询无条件重载路由。
+
+---
+
+## 结论
+
+本轮验证 SHA：`fcdb7a9da602b18c715256ddf0f4341c8298a935`。结论 **needs_revision**，独立通过 **13/14**，AC-6 不通过，1 个 P2 finding。CI 时间为 `2026-11-06T20:19:34.0803927+08:00`，14 项执行命令均退出 0；执行类验收直接采用该证据，未重跑。本轮内容追加于此，历史结论保留。
+
+验证 git SHA：fcdb7a9da602b18c715256ddf0f4341c8298a935。只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1；解压 commit/tree/blob 并校验 SHA1。命令输出 verified commit fcdb7a9da602b18c715256ddf0f4341c8298a935、plugin/lib/client.js matches commit=true、plugin/lib/index.js matches commit=true（统一 CRLF/LF）。未执行 git 命令。
+
+本轮 CI：.collab/tasks/001/ci-results.json:4，ranAt=2026-11-06T20:19:34.0803927+08:00，14 项 exitCode=0。SHA256：client.js=32d28e496777b6ab2f90308d7a01814d5c1251543ace14c8fc201589edd2fbb9；index.js=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157；ci-results.json=87ef188a48d188cbb868786629e6694e03e85726ef1d211ab8b10d026db7ad2d。
+
+上一轮已加载路由持续显示过期项目错误的问题已修复：client.js:465–474 不再写入 routing 错误；497 仍通过已加载标记避免正常轮询覆盖草稿。本轮发现首次项目发现失败时的另一分支仍显示无在途请求的加载状态，见问题清单。
+
+brief 未指定额外验收报告路径。本轮仅追加本文件并更新 verdict-r1.json；未执行 git、修改产品/规格/状态文件或创建其它文件。仓库没有 scripts/check-fast.ps1；DSH 人工观察按 acceptance.md 不计自动判定，未执行。
+
+## 逐条 AC 结果
+
+以下 CI 行号均指 `.collab/tasks/001/ci-results.json`，代码路径为 `plugin/lib/`；每项执行退出码均为 0，独立核对结果另列。AC-9 首段与 AC-13 命令相同，共用执行证据。
+
+| AC | 结果 | CI 行号 | 证据与独立核对 |
+|---|---|---|---|
+| AC-1 | 通过 | 10–16 | output 为空，客户端语法通过。 |
+| AC-2 | 通过 | 19–25 | output 为空，Host 语法通过。 |
+| AC-3 | 通过 | 28–34 | OK tabs+home；client.js:61–74、108–119、542–620、641–690、1005–1012：五 Tab、滚动、默认首页、持久化、真实端点、首页区块。 |
+| AC-4 | 通过 | 37–43 | OK legacy ops；client.js:272–390、505–540、582–620、825–999：请求代次隔离、卸载清理、加载前禁用写操作、回答/继续/合并二次确认/预授权/分档、ledger、执行记录及日志保留。只读对照基准输出 Settings unchanged=true、Boundary/focusTask/HeaderChips/apply unchanged=true。 |
+| AC-5 | 通过 | 46–52 | OK no mock data；client.js:694–728、947–952 投影真实字段，仅有真实模型字段才显示模型行，不补造 resolved；G1/T gate 明示未实现。 |
+| AC-6 | 不通过 | 55–61 | 静态命令 OK empty states；但 client.js:252–253、426–427、460–474、592–594、772 的首次项目列表失败路径没有路由请求，却持续显示“读取中…”。违反 design.md:279，详见 P2 finding。其余空/失败分支见 client.js:660–684、694–728、819、829、854、945。 |
+| AC-7 | 通过 | 64–70 | OK settings+slash；client.js:426–457、497、593、769–823：路由编辑保存、模型矩阵、只读目录；686–690 命令仅复制或标未实现。正常轮询不覆盖已加载草稿，项目失败不再污染已加载路由错误；初次依赖失败计入 AC-6。 |
+| AC-8 | 通过 | 73–79 | OK host routes 14；index.js:854–874 为只读转发，857/868 拒绝非 GET，872–873 使用原始发现缓存且不返回原始配置/凭据。剔除新增路由和顶部注释后，只读基准比较输出 old Host nonempty source unchanged=true。 |
+| AC-9 | 通过 | 91–97；首段共用 82–88 | OK data projection+navigation、OK render 5 tabs；client.js:254、297–316、613–620、694–728、1005–1012 与五页、真实字段、空/已有会话、读取失败、Provider 状态、切项目及跨项目回答定位断言一致。夹具不执行 effect，未覆盖 AC-6 finding。 |
+| AC-10 | 通过 | 100–106 | OK host routes runtime；空/已有会话、模型目录、四种非 GET 方法返回 405、旧 projects 路由及隔离目录前后内容不变；index.js:854–874 与结果一致。 |
+| AC-11 | 通过 | 109–115 | output 汇总 # tests 71、# pass 71、# fail 0、# skipped 0；采用本轮 CI，未重跑。 |
+| AC-12 | 通过 | 118–124 | OK write scope；对应 acceptance.md:323–334 的指定基准检查，当前断言允许 client.js、index.js、.gitignore；未执行 git。 |
+| AC-13 | 通过 | 82–88 | OK render 5 tabs；client.js:254 默认首页，1005–1012 分派五页。 |
+| AC-14 | 通过 | 127–133 | OK no untracked files；对应 acceptance.md:339–345 的独立检查；采用 CI 证据，未执行 git。 |
+
+## 问题清单
+
+1. **P2 / AC-6：首次项目列表读取失败时，角色路由显示无在途请求的加载状态。**
+
+   触发：首次打开驾驶舱（或挂载时保存的 Tab 已是设置），尚未成功确定当前项目，`/agentline/projects` 因网络、非 JSON 或 `ok:false` 失败；进入或停留在设置页。
+
+   client.js:252–253 将 project/routing 初始化为 null。592–594 虽调用 loadRouting(project)，426–427 会因无项目直接返回，不发起路由请求。460–474 的项目失败分支记录 projects/pipeline 错误，但 772 的路由区域只判断 sourceErrors.routing 与 routing，结果持续显示“读取中…”，776/781/790 禁用编辑保存。586 每 10 秒重试项目发现；只要项目请求继续失败，或用户重新进入设置，该无请求加载状态就继续存在。顶部项目下拉虽显示项目失败，角色路由区域仍错误地宣称正在读取。
+
+   规格依据：design.md:279 明确要求网络失败、非 JSON、ok:false 显示读取失败，不得无限加载。这与已加载路由的错误隔离不同：上一轮的错误污染已经修复；本项针对没有当前项目、路由请求无法启动的依赖失败。项目发现后续成功可以恢复，但不能代替失败期间准确的状态展示。本轮为只读控制流核对，没有重跑验收或新建测试文件；现有 CI 静态检查只确认文案存在，无 effect 的夹具没有覆盖该路径。
+
+   修复建议：在没有当前项目且项目发现失败时，由角色路由区域显示项目依赖读取失败；已有项目/路由仍由各自数据源管理错误，继续保护已加载草稿和在途保存反馈。无需增加接口字段或修改验收断言。
+

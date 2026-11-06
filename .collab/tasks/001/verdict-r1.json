@@ -1,32 +1,32 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "54fef51fa54aa809ad77a6f98e4c74f22e770f74",
+  "git_sha": "fcdb7a9da602b18c715256ddf0f4341c8298a935",
   "passed": 13,
   "total": 14,
   "findings": [
     {
       "id": "AC-6",
       "severity": "P2",
-      "problem": "项目列表短暂失败会污染已成功加载的角色路由错误状态，项目恢复后错误提示持续残留。client.js:465–472 在 /agentline/projects 失败时写入 sourceErrors.routing，但保留 routing、draft 和 loaded.current.routing=true；476–477 的恢复分支仅清除 projects/pipeline 错误，497 因 routing 已加载而跳过 loadRouting。后续正常项目轮询也不会清除 routing 错误，772 因而一直显示“项目读取失败”，即使项目和路由数据均有效，455 的成功保存也不清除此错误。复现条件：设置页已加载路由，项目列表的一次 10 秒轮询失败，随后项目列表成功且不切换项目或 Tab。违反 design.md:279 的各区块错误隔离和下一次轮询可恢复要求。请让项目列表失败只更新其自身错误，保留路由实际读取错误的独立生命周期；修复时继续保护草稿与在途保存反馈。结论来自只读控制流与行号核对，现有无 effect 的 CI 夹具未覆盖此路径。"
+      "problem": "首次打开驾驶舱且 /agentline/projects 读取失败时，设置页角色路由显示无在途请求的“读取中…”。client.js:252–253 初始 project/routing 为 null；426–427 的 loadRouting(null) 直接返回，592–594 的设置 effect 不会发出路由请求。460–474 的项目失败分支只设置 projects/pipeline 错误，不产生可用于该依赖阻塞状态的路由提示；772 又仅检查 sourceErrors.routing 和 routing，因此仍显示“读取中…”，776/781/790 禁用编辑保存。项目列表持续失败时，10 秒轮询和重新进入设置均重复这一路径。违反 design.md:279 的读取失败不得显示无限加载要求。已加载路由不再被项目错误污染，上一轮问题已修复；本 finding 仅针对首次未能确定项目的分支。建议在没有当前项目且项目发现失败时，由路由区域展示项目依赖读取失败；保留独立路由错误生命周期和已加载草稿，正常轮询不要重置路由。结论为只读控制流核对，CI 静态检查及不执行 effect 的夹具未覆盖此路径。"
     }
   ],
   "evidence": [
-    "验证 SHA：54fef51fa54aa809ad77a6f98e4c74f22e770f74。只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1；解压 commit/tree/blob 并核验 SHA1。命令输出 verified commit 54fef51fa54aa809ad77a6f98e4c74f22e770f74、plugin/lib/client.js matches commit=true、plugin/lib/index.js matches commit=true；比较统一 CRLF/LF。未执行 git 命令。",
-    "执行证据采用 .collab/tasks/001/ci-results.json:4，ranAt=2026-11-06T20:12:09.6420551+08:00，14 项均 exitCode=0。SHA256：client.js=c1c284dd62ca72c44d98b3ae9ac8f3c158703e1a7b069ce5bcc71f7d7760ddbf；index.js=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157；ci-results.json=22f460b73821217a68ac2be7a9d27e1053dd6b521d2716fbd1f6cfaba37411cc。",
-    "AC-1 通过：ci-results.json:10–16；output 为空，exitCode=0，符合客户端语法检查。",
-    "AC-2 通过：ci-results.json:19–25；output 为空，exitCode=0，符合 Host 语法检查。",
-    "AC-3 通过：ci-results.json:28–34；OK tabs+home；client.js:61–74、108–119、542–620、641–690、1005–1012：页签滚动、默认首页、持久化、真实端点、轮询与首页区块均有对应实现。",
-    "AC-4 通过：ci-results.json:37–43；OK legacy ops；client.js:272–390、505–540、582–620、825–999：项目/任务/日志代次隔离、卸载清理、任务控制、回答、继续、合并二次确认/预授权/分档、ledger、记录和日志保留。只读基准比较输出 Settings unchanged=true、Boundary/focusTask/HeaderChips/apply unchanged=true。",
-    "AC-5 通过：ci-results.json:46–52；OK no mock data；client.js:694–728 投影真实会话/目录字段，947–952 仅展示存在的模型字段，不补造 resolved；708、952 明示 G1/T gate 未实现。",
-    "AC-6 不通过：ci-results.json:55–61；静态命令 OK empty states，但 client.js:465–477 将项目读取错误写入 routing，497 因已加载而不重新读取，772 持续显示过期错误。违反 design.md:279，详见 P2 finding。其它加载/失败/空值分支见 client.js:660–684、694–728、819、829、854、945。",
-    "AC-7 通过：ci-results.json:64–70；OK settings+slash；client.js:426–457、769–823 保留路由编辑保存、模型矩阵和只读目录；497 仅未加载时重读路由，已修复正常轮询覆盖草稿；593 按设置进入/项目变化读取；686–690 的命令仅复制或标为未实现。错误状态污染统一计入 AC-6。",
-    "AC-8 通过：ci-results.json:73–79；OK host routes 14；index.js:854–874 只读转发，857/868 拒绝非 GET，872–873 使用原始发现缓存且不回传原始配置/凭据。只读基准对象比较输出 old Host nonempty source unchanged=true（排除新增路由和顶部路由注释）。",
-    "AC-9 通过：ci-results.json:91–97；首段共用 82–88；OK data projection+navigation；首段 OK render 5 tabs 与 AC-13 共用执行证据。client.js:254、297–316、613–620、694–728、1005–1012 与空/已有会话、错误分支、Provider 状态和跨项目 Build 定位断言一致。夹具不执行 effect，未覆盖 AC-6 finding。",
-    "AC-10 通过：ci-results.json:100–106；OK host routes runtime；原断言覆盖空/已有会话、目录、四种非 GET 方法返回 405、旧 projects 路由及隔离目录内容不变；index.js:854–874 与结果一致。",
-    "AC-11 通过：ci-results.json:109–115；exitCode=0；读取 output 汇总为 # tests 71、# pass 71、# fail 0、# skipped 0。采用编排方有效执行证据，未重跑测试。",
-    "AC-12 通过：ci-results.json:118–124；OK write scope；采用 acceptance.md:323–334 对指定基准的检查结果，当前断言允许 client.js、index.js、.gitignore；未执行 git 命令。",
-    "AC-13 通过：ci-results.json:82–88；OK render 5 tabs；client.js:254 默认首页，1005–1012 分派五页，满足首段检查。",
-    "AC-14 通过：ci-results.json:127–133；OK no untracked files；采用 acceptance.md:339–345 的独立未跟踪文件检查结果；未执行 git 命令。",
-    "独立结论 needs_revision，通过 13/14，AC-6 不通过，1 个 P2 finding。前轮 AC-7 的正常轮询覆盖草稿已修复，但本轮发现已加载路由的错误状态仍被项目列表污染。仅向 review-r1.md 追加本轮结论并更新 verdict-r1.json，历史报告保留。brief 未指定额外验收报告路径。未重跑执行类验收或新建其它文件；DSH 人工观察按验收说明不计自动判定，仓库没有 scripts/check-fast.ps1。"
+    "验证 git SHA：fcdb7a9da602b18c715256ddf0f4341c8298a935。只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1；解压 commit/tree/blob 并校验 SHA1。命令输出 verified commit fcdb7a9da602b18c715256ddf0f4341c8298a935、plugin/lib/client.js matches commit=true、plugin/lib/index.js matches commit=true（统一 CRLF/LF）。未执行 git 命令。",
+    "本轮 CI：.collab/tasks/001/ci-results.json:4，ranAt=2026-11-06T20:19:34.0803927+08:00，14 项 exitCode=0。SHA256：client.js=32d28e496777b6ab2f90308d7a01814d5c1251543ace14c8fc201589edd2fbb9；index.js=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157；ci-results.json=87ef188a48d188cbb868786629e6694e03e85726ef1d211ab8b10d026db7ad2d。",
+    "AC-1 通过：ci-results.json:10–16，exitCode=0、output 为空，符合 client.js 语法检查。",
+    "AC-2 通过：ci-results.json:19–25，exitCode=0、output 为空，符合 index.js 语法检查。",
+    "AC-3 通过：ci-results.json:28–34，OK tabs+home；client.js:61–74、108–119、542–620、641–690、1005–1012，核对五 Tab、横向滚动、默认首页、持久化、真实端点和首页区块。",
+    "AC-4 通过：ci-results.json:37–43，OK legacy ops；client.js:272–390、505–540、582–620、825–999，核对项目/任务/日志代次、卸载清理、任务写操作禁用及反馈隔离、回答/继续/合并/分档/ledger/记录/日志。只读对照指定基准，Settings unchanged=true、Boundary/focusTask/HeaderChips/apply unchanged=true。",
+    "AC-5 通过：ci-results.json:46–52，OK no mock data；client.js:694–728、947–952 投影真实会话/目录/模型字段，没有补造 resolved，G1/T gate 显示未实现。",
+    "AC-6 不通过：ci-results.json:55–61 的静态命令输出 OK empty states，但 client.js:252–253、426–427、460–474、592–594、772 在首次项目列表失败、project=null 时没有路由请求却持续显示“读取中…”。违反 design.md:279，详见 P2 finding。其余空/失败分支见 client.js:660–684、694–728、819、829、854、945。",
+    "AC-7 通过：ci-results.json:64–70，OK settings+slash；client.js:426–457、497、593、769–823 保留角色路由编辑保存、模型矩阵、只读目录；686–690 的命令仅复制或标未实现。正常项目轮询不覆盖已加载草稿，项目失败不再污染已加载路由的错误提示；初次加载依赖失败计入 AC-6。",
+    "AC-8 通过：ci-results.json:73–79，OK host routes 14；index.js:854–874 按规格只读转发，857/868 非 GET 返回 405，872–873 使用原始发现缓存，不返回原始配置或凭据。只读对照基准、去掉两条新增路由及顶部路由注释后，命令输出 old Host nonempty source unchanged=true。",
+    "AC-9 通过：ci-results.json:91–97，OK data projection+navigation；首段共用 82–88 的 OK render 5 tabs。client.js:254、297–316、613–620、694–728、1005–1012 与默认首页、空/已有会话、错误、目录/Provider 投影、项目切换及跨项目回答定位断言一致。夹具不执行 effect，未覆盖 AC-6 finding。",
+    "AC-10 通过：ci-results.json:100–106，OK host routes runtime；原断言覆盖空项目、已有会话、模型目录、POST/PUT/PATCH/DELETE 拒绝、旧 projects 路由及隔离目录内容不变；index.js:854–874 与结果一致。",
+    "AC-11 通过：ci-results.json:109–115，exitCode=0，output 汇总 # tests 71、# pass 71、# fail 0、# skipped 0。直接采用编排方证据，未重跑测试。",
+    "AC-12 通过：ci-results.json:118–124，OK write scope；对应 acceptance.md:323–334 的指定基准检查，当前断言允许 client.js、index.js、.gitignore。按验收脚本结果判定，未自行执行 git。",
+    "AC-13 通过：ci-results.json:82–88，OK render 5 tabs；client.js:254 默认首页，1005–1012 分派五页。",
+    "AC-14 通过：ci-results.json:127–133，OK no untracked files；对应 acceptance.md:339–345 的独立检查，采用编排方证据，未执行 git。",
+    "独立结论 needs_revision，通过 13/14，AC-6 不通过，1 个 P2 finding。仅追加 review-r1.md 并更新 verdict-r1.json，保留报告历史。brief 未指定额外验收报告路径。未重跑执行类验收、修改被评审文件或创建其它文件；DSH 人工观察按 acceptance.md 不计自动判定，scripts/check-fast.ps1 不存在。"
   ]
 }
