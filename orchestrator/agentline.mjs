@@ -724,6 +724,18 @@ async function cmdBlueprint() {
         return
       }
       const r = readBlueprint(repo, id)
+      // 指定会话不存在，或目录里没有 state.json，都是缺失数据：文本和 JSON 都要非零退出。
+      if (r.state === 'missing' || r.state === 'empty') {
+        const where = path.join(repo, '.collab', 'blueprint', id)
+        const msg = r.state === 'missing'
+          ? `blueprint ${id}: missing (${where})`
+          : `blueprint ${id}: empty (state.json missing)`
+        if (args.json) {
+          log(JSON.stringify({ id, ...r, g1: null, next: null }, null, 2))
+          process.exit(1)
+        }
+        fail(msg)
+      }
       const g1 = r.session && r.state !== 'corrupt' ? evaluateG1(repo, id) : null
       const next = r.session && r.state !== 'corrupt' ? decide(r.session, g1) : null
       if (args.json) {
@@ -731,8 +743,6 @@ async function cmdBlueprint() {
         if (r.state === 'corrupt') process.exit(1)
         return
       }
-      if (r.state === 'missing') { log(`blueprint ${id}: missing (${path.join(repo, '.collab', 'blueprint', id)})`); return }
-      if (r.state === 'empty') { log(`blueprint ${id}: empty (state.json missing)`); return }
       if (r.state === 'corrupt') {
         log(`blueprint ${id}: corrupt`)
         for (const e of r.errors) log('  ' + e)

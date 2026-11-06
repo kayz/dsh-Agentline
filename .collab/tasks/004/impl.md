@@ -132,3 +132,21 @@ Blueprint 的 `callRole` 不再采用 adapter 对象上的 `modelResolved`。它
 | AC-3 | 通过 | `blueprint-g1.test.mjs` 34 通过 / 0 失败，退出码 0 |
 | AC-4 | 通过 | `blueprint-ui.test.mjs` 7 通过 / 0 失败，退出码 0 |
 | AC-5 | 通过 | `orchestrator` 的 `npm test` 164 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
+
+## 指定会话缺失
+
+审查指出：`blueprint status --id` 在会话目录不存在，或目录存在但没有 `state.json` 时，文本和 `--json` 都正常返回，退出码是 0。设计要求损坏或缺失数据报告错误。没有指定 id 的列表仍把不存在的根目录当作空列表。
+
+现在指定 id 遇到这两种状态都非零退出，并且不创建 `state.json`。文本走原有 `ERROR:` 约定；`--json` 仍输出原来的 `state`（`missing` 或 `empty`）后退出。损坏会话的处理不变。
+
+## 自测（指定会话缺失）
+
+在仓库根用 Node 跑了与 `acceptance.md` 相同的检查（本环境是 bash，不是 pwsh）。界面没有桌面浏览器，插件测试用同一套渲染桩驱动真实 `/agentline/blueprint` 路由。
+
+| AC | 结果 | 输出 / 退出码 |
+|---|---|---|
+| AC-1 | 通过 | `node --check` 三个文件后语法检查通过，退出码 0 |
+| AC-2 | 通过 | `blueprint-cli.test.mjs` 10 通过 / 0 失败，退出码 0。其中覆盖缺失会话和缺少 `state.json` 的文本与 `--json` |
+| AC-3 | 通过 | `blueprint-g1.test.mjs` 含在 orchestrator 测试中，34 项通过（含 32 个子例） |
+| AC-4 | 通过 | `blueprint-ui.test.mjs` 7 通过 / 0 失败，退出码 0 |
+| AC-5 | 通过 | `orchestrator` 的 `npm test` 164 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
