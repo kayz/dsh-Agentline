@@ -263,3 +263,47 @@ test('g0: missing or corrupt session is not evaluated as success', (t) => {
   assert.equal(r.pass, false)
   assert.equal(r.status, 'fail')
 })
+
+test('g0: a confirmation written by another model or expert does not count', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+
+  const foreign = evidence()
+  foreign.confirmations.expert_a = { ...foreign.confirmations.expert_a, expert: 'expert_b', model: 'top-b' }
+  materialize(repo, 'g0', foreign)
+  let r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.experts_confirmed').pass, false)
+  assert.match(check(r, 'G0.experts_confirmed').evidence, /expert_a:missing/)
+
+  const swapped = evidence()
+  swapped.confirmations.expert_a = { ...swapped.confirmations.expert_a, model: 'top-d' }
+  materialize(repo, 'g0', swapped)
+  r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false, 'confirmation must come from the assigned model')
+  assert.equal(check(r, 'G0.experts_confirmed').pass, false)
+})
+
+test('g0: a decision confirmation without recorded content or time does not count', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+
+  for (const userAction of [{ kind: 'confirm' }, { kind: 'confirm', text: '   ', at: AT }, { kind: 'default', text: 'P6' }]) {
+    const data = evidence()
+    data.decisions[0] = { ...data.decisions[0], status: 'confirmed', confirmed_by_user: userAction }
+    materialize(repo, 'g0', data)
+    const r = evaluateG0(repo, 'g0')
+    assert.equal(r.pass, false, JSON.stringify(userAction))
+    assert.equal(check(r, 'G0.each_decision_confirmed').pass, false)
+  }
+})
+
+test('g0: questions.json that is not an array cannot prove "no blocking"', (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  materialize(repo, 'g0', evidence())
+  fs.writeFileSync(path.join(repo, '.collab', 'studio', 'g0', 'questions.json'), '{"open":[]}', 'utf8')
+  const r = evaluateG0(repo, 'g0')
+  assert.equal(r.pass, false)
+  assert.equal(check(r, 'G0.no_open_blocking').pass, false)
+})

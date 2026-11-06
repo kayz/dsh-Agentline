@@ -32,6 +32,50 @@ export const STUDIO_SCHEMA = 'agentline.studio/v1'
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
+/**
+ * 只读讨论：能强制到只读模式的 adapter 及其参数。
+ * 这些参数覆盖 provider.options，只影响 Studio 调用，不改变 flow 的既有语义。
+ */
+const READONLY_ADAPTER_OPTIONS = {
+  'claude-cli': { permissionMode: 'plan', allowedTools: ['Read'] },
+  'codebuddy-cli': { permissionMode: 'plan' },
+  'codex-cli': { sandbox: 'read-only', approvalPolicy: 'never' },
+}
+
+/** 问题已结束的状态：其余状态（含缺失）都按未处理对待。 */
+const CLOSED_QUESTION = new Set(['answered', 'default_adopted', 'resolved', 'closed'])
+
+/**
+ * 返回一个只读的 provider 副本；无法保证只读时返回 null。
+ * 显式 capabilities.readonly_mode=false 一律拒绝；没有声明时只有能强制到只读模式的
+ * adapter 才允许（例如 codex 的 sandbox=read-only），其余渠道必须显式声明。
+ */
+export function readonlyProvider(provider) {
+  if (!provider || typeof provider !== 'object') return null
+  const declared = provider.capabilities?.readonly_mode
+  if (declared === false) return null
+  // 显式声明 true 的渠道已经有自己的只读配置，直接用；否则只能靠能钉死的 adapter。
+  const forced = declared === true ? {} : (READONLY_ADAPTER_OPTIONS[provider.adapter] || {})
+  if (declared !== true && !Object.keys(forced).length) return null
+  return {
+    ...provider,
+    options: { ...(provider.options || {}), ...forced },
+    capabilities: { ...(provider.capabilities || {}), readonly_mode: true },
+  }
+}
+
+export function assertReadonlyProvider(provider, label) {
+  const ro = readonlyProvider(provider)
+  if (!ro) {
+    throw new StudioError(
+      'E_READONLY_UNAVAILABLE',
+      `provider ${label} cannot guarantee a read-only Studio conversation` +
+      '（显式声明 capabilities.readonly_mode=true，或使用支持只读模式的 adapter）',
+    )
+  }
+  return ro
+}
+
 export class StudioError extends Error {
   constructor(code, message) {
     super(message)
@@ -147,9 +191,8 @@ function resolveRoles(config, projectCfg, overrides = {}) {
       }
       const provider = config.providers?.[model.provider]
       if (!provider) { reasons.push(`${key}: provider ${model.provider} not configured`); continue }
-      if (provider.capabilities && provider.capabilities.readonly_mode === false) {
-        throw new StudioError('E_READONLY_UNAVAILABLE', `provider ${model.provider} cannot run read-only Studio conversations`)
-      }
+      // 只读能力是渠道级问题：换一个候选也不会变好，直接报告。
+      assertReadonlyProvider(provider, model.provider)
       picked = { key, model, provider }
       break
     }
@@ -193,10 +236,18 @@ export function readStudio(repo, id) {
   if (!validSession(raw.value)) return { state: 'corrupt', dir, session: null, errors: ['session.json missing required fields'] }
 
   const errors = []
-  const questions = readJson(path.join(dir, 'questions.json'))
-  if (!questions.ok && fs.existsSync(path.join(dir, 'questions.json'))) errors.push(`questions.json unreadable: ${questions.error}`)
-  const decisions = readJson(path.join(dir, 'decisions.json'))
-  if (!decisions.ok && fs.existsSync(path.join(dir, 'decisions.json'))) errors.push(`decisions.json unreadable: ${decisions.error}`)
+  const questionsPath = path.join(dir, 'questions.json')
+  const decisionsPath = path.join(dir, 'decisions.json')
+  const questions = readJson(questionsPath)
+  const questionsInvalid = fs.existsSync(questionsPath) && (!questions.ok || !Array.isArray(questions.value))
+  if (questionsInvalid) {
+    errors.push(`questions.json invalid: ${questions.ok ? 'not an array' : questions.error}`)
+  }
+  const decisions = readJson(decisionsPath)
+  const decisionsInvalid = fs.existsSync(decisionsPath) && (!decisions.ok || !Array.isArray(decisions.value))
+  if (decisionsInvalid) {
+    errors.push(`decisions.json invalid: ${decisions.ok ? 'not an array' : decisions.error}`)
+  }
 
   const confirmations = {}
   const cdir = path.join(dir, 'confirmations')
@@ -205,7 +256,8 @@ export function readStudio(repo, id) {
   for (const name of names) {
     const r = readJson(path.join(cdir, name))
     if (!r.ok) { errors.push(`confirmations/${name} unreadable: ${r.error}`); continue }
-    confirmations[r.value?.expert || name.replace(/\.json$/, '')] = r.value
+    // 以文件名为准，G0 再校验记录内的 expert 是否与之匹配，避免记录互相冒充。
+    confirmations[name.replace(/\.json$/, '')] = r.value
   }
 
   return {
@@ -213,9 +265,9 @@ export function readStudio(repo, id) {
     dir,
     session: raw.value,
     questions: Array.isArray(questions.value) ? questions.value : [],
-    questionsInvalid: !questions.ok && fs.existsSync(path.join(dir, 'questions.json')),
+    questionsInvalid,
     decisions: Array.isArray(decisions.value) ? decisions.value : [],
-    decisionsInvalid: !decisions.ok && fs.existsSync(path.join(dir, 'decisions.json')),
+    decisionsInvalid,
     confirmations,
     minutes: readText(path.join(dir, 'minutes-final.md')).value || '',
     errors,
@@ -253,9 +305,12 @@ export function currentStep(session) {
   return STEPS.find((s) => !done.has(s)) || 'done'
 }
 
+/**
+ * 未处理的阻塞问题。状态缺失时按"未处理"对待——未回答的问题不能被当成已确认。
+ */
 function openBlocking(questions, invalid) {
-  if (invalid) return [{ id: 'questions.json', text: 'questions.json 损坏，无法证明没有阻塞问题' }]
-  return (questions || []).filter((q) => q && q.blocking && (q.status === 'open' || q.status === 'unresolved'))
+  if (invalid) return [{ id: 'questions.json', text: 'questions.json 无效，无法证明没有阻塞问题', status: 'invalid' }]
+  return (questions || []).filter((q) => q && q.blocking && !CLOSED_QUESTION.has(String(q.status || 'open')))
 }
 
 export function openBlockingQuestions(repo, id) {
@@ -264,9 +319,22 @@ export function openBlockingQuestions(repo, id) {
   return openBlocking(r.questions, r.questionsInvalid)
 }
 
-function decisionConfirmed(d) {
-  return !!(d && d.confirmed_by_user && (d.confirmed_by_user.kind === 'confirm' || d.confirmed_by_user.kind === 'default'))
+/** 供 CLI/UI 复用同一阻塞判定。 */
+export function blockingQuestions(questions, invalid = false) {
+  return openBlocking(questions, invalid)
 }
+
+/** 用户动作必须带类型、内容和时间：只有类型不算确认。 */
+function decisionAction(d) {
+  const a = d && d.confirmed_by_user
+  if (!a || typeof a !== 'object') return null
+  if (a.kind !== 'confirm' && a.kind !== 'default') return null
+  if (!String(a.text || '').trim()) return null
+  if (!a.at || typeof a.at !== 'string') return null
+  return a
+}
+
+function decisionConfirmed(d) { return !!decisionAction(d) }
 
 function allDecisionsConfirmed(decisions) {
   return Array.isArray(decisions) && decisions.length > 0 && decisions.every(decisionConfirmed)
@@ -404,8 +472,8 @@ function confirmPrompt(role, session, decisions, minutes) {
   ].join('\n')
 }
 
-/** 从模型输出里取最后一个完整 JSON 对象（忽略代码块标记） */
-export function extractJson(text) {
+/** 定位最后一个顶层 JSON 对象的区间（忽略字符串与代码块标记） */
+function lastJsonSpan(text) {
   const s = String(text || '')
   let depth = 0
   let start = -1
@@ -431,8 +499,29 @@ export function extractJson(text) {
       }
     }
   }
-  if (!last) return null
-  try { return JSON.parse(s.slice(last[0], last[1] + 1)) } catch { return null }
+  return last
+}
+
+/** 从模型输出里取最后一个完整 JSON 对象（忽略代码块标记） */
+export function extractJson(text) {
+  const s = String(text || '')
+  const span = lastJsonSpan(s)
+  if (!span) return null
+  try { return JSON.parse(s.slice(span[0], span[1] + 1)) } catch { return null }
+}
+
+/**
+ * 把模型输出拆成「给人看的正文」与「机器 JSON」。
+ * 纪要只保留正文：JSON 块属于控制数据，不能当成纪要内容。
+ */
+export function splitModelOutput(text) {
+  const s = String(text || '')
+  const span = lastJsonSpan(s)
+  if (!span) return { prose: s.trim(), json: null }
+  const prose = (s.slice(0, span[0]) + '\n' + s.slice(span[1] + 1)).replace(/\n{3,}/g, '\n\n').trim()
+  let json = null
+  try { json = JSON.parse(s.slice(span[0], span[1] + 1)) } catch { json = null }
+  return { prose, json }
 }
 
 async function callRole({ repo, dir, role, prompt, config, adapterFactory, log, session }) {
@@ -440,11 +529,9 @@ async function callRole({ repo, dir, role, prompt, config, adapterFactory, log, 
   if (!assigned) throw new StudioError('E_ROLE_UNASSIGNED', `role ${role} has no assigned model`)
   const model = config.models?.[assigned.model]
   if (!model) throw new StudioError('E_MODEL_MISSING', `model ${assigned.model} is no longer configured`)
-  const provider = config.providers?.[model.provider]
-  if (!provider) throw new StudioError('E_PROVIDER_MISSING', `provider ${model.provider} is not configured`)
-  if (provider.capabilities && provider.capabilities.readonly_mode === false) {
-    throw new StudioError('E_READONLY_UNAVAILABLE', `provider ${model.provider} cannot run read-only Studio conversations`)
-  }
+  const providerCfg = config.providers?.[model.provider]
+  if (!providerCfg) throw new StudioError('E_PROVIDER_MISSING', `provider ${model.provider} is not configured`)
+  const provider = assertReadonlyProvider(providerCfg, model.provider)
   const adapter = adapterFactory ? adapterFactory(provider) : getAdapter(provider)
   if (!adapter || typeof adapter.run !== 'function') throw new StudioError('E_NO_ADAPTER', `no adapter for provider ${model.provider}`)
 
@@ -537,6 +624,7 @@ function normalizeDecisions(parsed, existing) {
 function statusAfterStep(session, questions, decisions, extra = {}) {
   const blocked = openBlocking(questions, false)
   if (blocked.length) return { status: 'awaiting_user', blocking_reason: `${blocked.length} 个阻塞问题待回答` }
+  if (extra.roundLimit) return { status: 'awaiting_user', blocking_reason: extra.roundLimit }
   if (extra.reject) return { status: 'awaiting_user', blocking_reason: 'expert_reject' }
   if (currentStep(session) === 'done') {
     return allDecisionsConfirmed(decisions)
@@ -553,7 +641,8 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
   const r = loadForWrite(repo, id)
   const session = r.session
   if (session.status === 'concluded') throw new StudioError('E_CONCLUDED', `studio session ${id} is already concluded`)
-  if (r.questionsInvalid) throw new StudioError('E_CORRUPT_QUESTIONS', `questions.json unreadable in ${id}`)
+  if (r.questionsInvalid) throw new StudioError('E_CORRUPT_QUESTIONS', `questions.json invalid in ${id}`)
+  if (r.decisionsInvalid) throw new StudioError('E_CORRUPT_DECISIONS', `decisions.json invalid in ${id}`)
   const blocked = openBlocking(r.questions, false)
   if (blocked.length) {
     const limited = blocked.filter((q) => Number(q.rounds_used || 0) >= 2)
@@ -614,14 +703,16 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     questions = normalizeQuestions(parsed, r.questions)
     writeJson(path.join(dir, 'questions.json'), questions)
   } else if (step === 'scribe') {
-    const parsed = extractJson(output)
-    if (!parsed || !Array.isArray(parsed.decisions) || !String(output).trim()) {
-      saveSession(dir, { ...session, last_error: 'scribe output is missing minutes/decisions', calls: [...(session.calls || []), { step, role: providerRole, model: result.model, at: nowIso(), ok: false, error: 'invalid_json' }] })
-      throw new StudioError('E_INVALID_OUTPUT', 'scribe output is missing minutes or decisions JSON; step not advanced')
+    const split = splitModelOutput(output)
+    const parsed = split.json
+    if (!parsed || !Array.isArray(parsed.decisions) || !split.prose) {
+      saveSession(dir, { ...session, last_error: 'scribe output is missing minutes/decisions', calls: [...(session.calls || []), { step, role: providerRole, model: result.model, at: nowIso(), ok: false, error: 'invalid_output' }] })
+      throw new StudioError('E_INVALID_OUTPUT', 'scribe output is missing minutes prose or decisions JSON; step not advanced')
     }
-    decisions = normalizeDecisions(parsed, r.decisions)
+    // 决策由书记一次产出：重跑时替换，不追加，避免旧决策与纪要不一致。
+    decisions = normalizeDecisions(parsed, [])
     writeJson(path.join(dir, 'decisions.json'), decisions)
-    writeText(path.join(dir, 'minutes-final.md'), output)
+    writeText(path.join(dir, 'minutes-final.md'), split.prose)
   } else if (CONFIRM_TARGET[step]) {
     const parsed = extractJson(output)
     const verdict = parsed?.verdict
@@ -641,6 +732,9 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     writeJson(path.join(dir, 'confirmations', `${providerRole}.json`), record)
     if (verdict === 'reject') {
       reject = record
+      // 一次拒绝 = 一轮新的业务轮次：计入决策轮次，并允许该专家在处理后重新确认。
+      decisions = decisions.map((d) => ({ ...d, rounds_used: Number(d.rounds_used || 0) + 1 }))
+      writeJson(path.join(dir, 'decisions.json'), decisions)
       questions = [...r.questions, {
         id: nextQuestionId(r.questions),
         text: `专家 ${ROLE_LABEL[providerRole]} 拒绝：${record.notes || '未说明原因'}`,
@@ -658,9 +752,19 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     }
   }
 
-  const doneSteps = [...(session.steps_done || []), step]
+  let doneSteps = [...(session.steps_done || []), step]
+  let roundLimit = null
+  if (reject) {
+    // 轮次耗尽就停下：不自动选默认、也不进入第三轮讨论。
+    if (decisions.some((d) => Number(d.rounds_used || 0) > 2)) {
+      roundLimit = 'round_limit'
+    } else {
+      // 撤掉这一步，等用户处理后再由该专家独立重新确认。
+      doneSteps = doneSteps.filter((s) => s !== step)
+    }
+  }
   const outputs = { ...(session.outputs || {}) }
-  if (step !== 'scribe') outputs[step] = output
+  if (!CONFIRM_TARGET[step] && step !== 'scribe') outputs[step] = output
   const nextSession = {
     ...session,
     steps_done: doneSteps,
@@ -668,7 +772,7 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     last_error: null,
     calls: [...(session.calls || []), { step, role: providerRole, model: result.model, at: nowIso(), ok: true, error: null }],
   }
-  const after = statusAfterStep(nextSession, questions, decisions, { reject })
+  const after = statusAfterStep(nextSession, questions, decisions, { reject, roundLimit })
   const saved = saveSession(dir, { ...nextSession, ...after })
   return { ok: true, step, session: saved, questions, decisions }
 }
@@ -682,8 +786,8 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
 export function answerStudio(repo, id, { question, decision, text, adoptDefault = false, channel = 'cli' } = {}) {
   const r = loadForWrite(repo, id)
   const dir = r.dir
-  if (r.questionsInvalid) throw new StudioError('E_CORRUPT_QUESTIONS', 'questions.json unreadable')
-  if (r.decisionsInvalid) throw new StudioError('E_CORRUPT_DECISIONS', 'decisions.json unreadable')
+  if (r.questionsInvalid) throw new StudioError('E_CORRUPT_QUESTIONS', 'questions.json invalid')
+  if (r.decisionsInvalid) throw new StudioError('E_CORRUPT_DECISIONS', 'decisions.json invalid')
   const value = String(text || '').trim()
   if (!!question === !!decision) throw new StudioError('E_USAGE', 'answer requires exactly one of --question <id> or --decision <id>')
   if (!adoptDefault && !value) throw new StudioError('E_USAGE', 'answer requires --text "<内容>" or --default')
@@ -769,17 +873,26 @@ export function evaluateG0(repo, id, { now } = {}) {
   const minutes = String(r.minutes || '').trim()
   const decisions = Array.isArray(r.decisions) ? r.decisions : []
   const confirmations = r.confirmations || {}
+  const decisionsInvalid = !!r.decisionsInvalid
 
   const open = openBlocking(r.questions, r.questionsInvalid)
   const roundsOver = [
     ...(r.questions || []).filter((q) => Number(q.rounds_used || 0) > 2).map((q) => q.id),
     ...decisions.filter((d) => Number(d.rounds_used || 0) > 2).map((d) => d.id),
   ]
+  // 独立有效确认：必须来自该角色自己的模型，且带结论与时间；别人代写的确认不算。
+  const roleModel = (role) => session.roles?.[role]?.model || null
   const missingConf = EXPERTS.filter((role) => {
     const c = confirmations[role]
-    return !c || !['accept', 'accept_with_notes'].includes(c.verdict) || !c.model || !c.at
+    if (!c || typeof c !== 'object') return true
+    if (c.expert && c.expert !== role) return true
+    if (!['accept', 'accept_with_notes'].includes(c.verdict)) return true
+    if (!c.model || !c.at) return true
+    const assigned = roleModel(role)
+    if (assigned && c.model !== assigned) return true
+    return false
   })
-  const rejected = Object.values(confirmations).filter((c) => c && c.verdict === 'reject')
+  const rejected = EXPERTS.filter((role) => confirmations[role] && confirmations[role].verdict === 'reject')
   const scribeModel = session.roles?.scribe?.model || null
   const moderatorModel = session.roles?.moderator?.model || null
 
@@ -794,16 +907,18 @@ export function evaluateG0(repo, id, { now } = {}) {
     {
       id: 'G0.decisions_nonempty',
       desc: 'decisions.json 至少包含一个决策',
-      pass: decisions.length > 0,
+      pass: !decisionsInvalid && decisions.length > 0,
       waivable: false,
-      evidence: `decisions=${decisions.length}`,
+      evidence: decisionsInvalid ? 'decisions.json invalid' : `decisions=${decisions.length}`,
     },
     {
       id: 'G0.each_decision_confirmed',
       desc: '每个决策都有用户确认或明确采用默认的记录',
-      pass: decisions.length > 0 && decisions.every(decisionConfirmed),
+      pass: !decisionsInvalid && decisions.length > 0 && decisions.every(decisionConfirmed),
       waivable: false,
-      evidence: decisions.length === 0 ? 'no decisions' : (decisions.filter((d) => !decisionConfirmed(d)).map((d) => d.id).join(',') || 'all confirmed'),
+      evidence: decisionsInvalid ? 'decisions.json invalid'
+        : decisions.length === 0 ? 'no decisions'
+          : (decisions.filter((d) => !decisionConfirmed(d)).map((d) => d.id).join(',') || 'all confirmed'),
     },
     {
       id: 'G0.no_open_blocking',
@@ -824,7 +939,7 @@ export function evaluateG0(repo, id, { now } = {}) {
       desc: '三位专家各有独立有效确认，且无阻塞性拒绝',
       pass: missingConf.length === 0 && rejected.length === 0,
       waivable: false,
-      evidence: [...missingConf.map((x) => `${x}:missing`), ...rejected.map((c) => `${c.expert}:reject`)].join(',') || 'a/b/c accepted',
+      evidence: [...missingConf.map((x) => `${x}:missing`), ...rejected.map((x) => `${x}:reject`)].join(',') || 'a/b/c accepted',
     },
     {
       id: 'G0.scribe_ne_moderator',

@@ -668,7 +668,9 @@ window.__ModuleLoader__.load({
         }
         if (!r || !r.ok) {
           setStudioDetail(null)
-          setStudioDetailError((r && r.error) ? '无法读取会话：' + r.error : failure(r))
+          const label = r && r.state ? STUDIO_STATUS_TEXT[r.state] : null
+          const reason = (r && r.error) ? r.error : failure(r)
+          setStudioDetailError('无法读取会话：' + reason + (label ? '（状态：' + label + '）' : ''))
           return
         }
         setStudioDetailError('')

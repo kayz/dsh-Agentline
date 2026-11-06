@@ -23,7 +23,7 @@ import { loadConfig, loadProjectConfig, projectConfigPath, ROLES } from './lib/c
 import { getAdapter } from './lib/adapters/index.mjs'
 import {
   STUDIO_ROLES, readStudio, listSessions, createSession, runStudioStep, answerStudio,
-  concludeStudio, evaluateG0, currentStep, StudioError,
+  concludeStudio, evaluateG0, currentStep, blockingQuestions, StudioError,
 } from './lib/studio.mjs'
 import { discoverAll, saveDiscovery, discoverySummary, setRoleCandidates, addModel, formatModelTable } from './lib/models.mjs'
 import { buildCatalog } from './lib/model-catalog.mjs'
@@ -608,7 +608,7 @@ async function cmdStudio() {
       if (r.state === 'empty') { log(`studio ${id}: empty (session.json missing)`); return }
       if (r.state === 'corrupt') { log(`studio ${id}: corrupt`); for (const e of r.errors) log('  ' + e); process.exit(1) }
       printSession(r.session)
-      const open = (r.questions || []).filter((q) => q.blocking && (q.status === 'open' || q.status === 'unresolved'))
+      const open = blockingQuestions(r.questions, r.questionsInvalid)
       log(`  questions=${(r.questions || []).length} open_blocking=${open.length}  decisions=${(r.decisions || []).length}`)
       for (const q of open) log(`  ⏸ ${q.id} ${q.text}`)
       for (const d of r.decisions || []) log(`  ${d.confirmed_by_user ? '✓' : '·'} ${d.id} ${d.title} [${d.status}] rounds=${d.rounds_used ?? 0}`)
@@ -636,7 +636,7 @@ async function cmdStudio() {
       if (args.json) { log(JSON.stringify({ id, step: r.step, session: r.session, questions: r.questions, decisions: r.decisions }, null, 2)); return }
       log(`OK step=${r.step} status=${r.session.status} next=${currentStep(r.session)}`)
       printSession(r.session)
-      const open = (r.questions || []).filter((q) => q.blocking && q.status === 'open')
+      const open = blockingQuestions(r.questions)
       if (open.length) {
         log(`awaiting_user: ${open.length} blocking question(s)`)
         for (const q of open) log(`  ⏸ ${q.id} ${q.text}${q.default ? `（默认：${q.default}）` : ''}`)

@@ -360,3 +360,72 @@ test('studio cli: round limit is explicit and refuses a third discussion round',
   assert.match(limited.stderr, /round/)
   assert.equal(ctx.readSession('s5').status, 'awaiting_user')
 })
+
+test('studio cli: an expert reject blocks progress and must be re-confirmed independently', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  newSession(ctx, 's6')
+  for (let i = 0; i < 4; i++) assert.equal(ctx.run(['run', '--id', 's6']).status, 0)
+  const qs = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'questions.json'), 'utf8'))
+  for (const q of qs) assert.equal(ctx.run(['answer', '--id', 's6', '--question', q.id, '--text', '按默认']).status, 0)
+  assert.equal(ctx.run(['run', '--id', 's6']).status, 0) // scribe
+  assert.equal(ctx.run(['answer', '--id', 's6', '--decision', 'D-1', '--text', '确认']).status, 0)
+  assert.equal(ctx.run(['answer', '--id', 's6', '--decision', 'D-2', '--default']).status, 0)
+  assert.equal(ctx.run(['run', '--id', 's6']).status, 0) // confirm_a
+
+  // 让 expert_b 拒绝
+  writeJson(ctx.fixtureCfg, { responses: { confirm_b: JSON.stringify({ verdict: 'reject', notes: '范围需要收窄' }) } })
+  const rejected = ctx.run(['run', '--id', 's6'])
+  assert.equal(rejected.status, 0, rejected.stderr || rejected.stdout)
+  const afterReject = ctx.readSession('s6')
+  assert.equal(afterReject.status, 'awaiting_user')
+  assert.deepEqual(afterReject.steps_done.includes('confirm_a'), true)
+  assert.deepEqual(afterReject.steps_done.includes('confirm_b'), false, '被拒绝的确认步骤必须重做')
+
+  const rejectQuestions = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'questions.json'), 'utf8'))
+  const last = rejectQuestions[rejectQuestions.length - 1]
+  assert.equal(last.kind, 'expert_reject')
+  assert.equal(last.status, 'open')
+  assert.equal(last.expert, 'expert_b')
+
+  // 拒绝写入一轮业务轮次
+  const rejectedDecisions = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'decisions.json'), 'utf8'))
+  assert.deepEqual(rejectedDecisions.map((d) => d.rounds_used), [1, 1])
+
+  const blockedAgain = ctx.run(['run', '--id', 's6'])
+  assert.notEqual(blockedAgain.status, 0)
+  assert.match(blockedAgain.stderr, /awaiting_user/)
+  const failedG0 = ctx.run(['conclude', '--id', 's6'])
+  assert.notEqual(failedG0.status, 0)
+  assert.match(failedG0.stdout, /G0\.experts_confirmed/)
+
+  // 用户处理后，同一位专家必须独立重新确认
+  assert.equal(ctx.run(['answer', '--id', 's6', '--question', last.id, '--text', '收窄到 P6']).status, 0)
+  writeJson(ctx.fixtureCfg, {})
+  const before = ctx.callsList().length
+  assert.equal(ctx.run(['run', '--id', 's6']).status, 0)
+  assert.equal(ctx.callsList().length, before + 1)
+  assert.equal(ctx.callsList().slice(-1)[0], 'confirm_b')
+  const record = JSON.parse(fs.readFileSync(path.join(ctx.dir('s6'), 'confirmations', 'expert_b.json'), 'utf8'))
+  assert.equal(record.verdict, 'accept')
+  assert.equal(record.model, ctx.readSession('s6').roles.expert_b.model)
+
+  assert.equal(ctx.run(['run', '--id', 's6']).status, 0) // confirm_c
+  const pass = ctx.run(['conclude', '--id', 's6'])
+  assert.equal(pass.status, 0, pass.stdout + pass.stderr)
+  assert.match(pass.stdout, /G0 PASS/)
+})
+
+test('studio cli: a provider that cannot guarantee read-only refuses to start a session', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+
+  const cfg = JSON.parse(fs.readFileSync(ctx.base, 'utf8'))
+  cfg.providers.claude = { source: 'anthropic', adapter: 'cursor-agent', transport: 'cli', command: 'cursor' }
+  fs.writeFileSync(ctx.base, JSON.stringify(cfg, null, 2), 'utf8')
+
+  const r = ctx.run(['new', '--id', 'ro', '--title', 'x', '--input', '只读讨论'])
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /read-only/)
+  assert.equal(fs.existsSync(ctx.dir('ro')), false, '不能创建无法保证只读的会话')
+})

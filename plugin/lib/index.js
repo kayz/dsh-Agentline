@@ -478,6 +478,13 @@ function resolveProject(v) {
   return raw
 }
 
+/** Studio 只接受真实存在的目录，避免把路径拼进 .collab/studio 之外。 */
+function projectDirOrNull(v) {
+  const p = resolveProject(v)
+  if (!p) return null
+  try { return fs.statSync(p).isDirectory() ? path.resolve(p) : null } catch { return null }
+}
+
 /** 尝试从命令调用里取出当前工作区路径（不同版本字段名不同，逐个试） */
 function explicitProject(rawInput) {
   const m = String(rawInput || '').match(/--project\s+("?)([^"\s]+)\1\s*/)
@@ -866,15 +873,14 @@ export function apply(ctx, config) {
       route('/agentline/studio', 'agentline: studio', async (req, res) => {
         try {
           const u = new URL(req.url || '/', 'http://localhost')
-          const queryProject = resolveProject(u.searchParams.get('project'))
           const studioMod = await importFresh(path.join(agentlineHome(), 'lib', 'studio.mjs'))
 
           if (req.method === 'POST') {
             const body = await readBody(req)
             const action = String((body && body.action) || '')
             const id = String((body && body.id) || '')
-            const project = resolveProject((body && body.project) || u.searchParams.get('project'))
-            if (!project) return sendJson(res, { ok: false, error: 'missing project' }, 400)
+            const project = projectDirOrNull((body && body.project) || u.searchParams.get('project'))
+            if (!project) return sendJson(res, { ok: false, error: 'project not found' }, 400)
             if (!['new', 'run', 'answer', 'conclude'].includes(action)) return sendJson(res, { ok: false, error: 'unknown studio action' }, 400)
             if (!studioMod.isValidSessionId(id)) return sendJson(res, { ok: false, error: 'invalid studio session id' }, 400)
 
@@ -914,7 +920,8 @@ export function apply(ctx, config) {
           }
 
           if (req.method && req.method !== 'GET') return sendJson(res, { ok: false, error: 'GET or POST only' }, 405)
-          if (!queryProject) return sendJson(res, { ok: false, error: 'missing project' }, 400)
+          const queryProject = projectDirOrNull(u.searchParams.get('project'))
+          if (!queryProject) return sendJson(res, { ok: false, error: 'project not found' }, 400)
           const id = u.searchParams.get('id')
           if (id && !studioMod.isValidSessionId(id)) {
             return sendJson(res, { ok: false, error: 'invalid studio session id' }, 400)

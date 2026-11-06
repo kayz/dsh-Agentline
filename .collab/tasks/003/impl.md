@@ -57,8 +57,12 @@ expert_a → expert_b → expert_c → moderator → scribe → confirm_a → co
   缺省值不存在时拒绝。
 - 决策逐条确认：`--decision <D-n> --text` 记 `confirm`，`--default` 记 `default`；
   `statusAfterStep` 只在全部决策都有用户动作后才把会话标成 `ready`。
-- 业务轮次：回答一次问题会同时给该问题与关联决策记 1 轮；达到 2 轮后拒绝再开文本讨论
-  轮次（`E_ROUND_LIMIT`），但允许显式采用默认。轮次不因失败/重试自增。
+- 业务轮次：回答一次问题给该问题记 1 轮（若问题关联到某个决策，同时给该决策记 1 轮）；
+  达到 2 轮后拒绝再开文本讨论轮次（`E_ROUND_LIMIT`），但允许显式采用默认。轮次不因失败/重试自增。
+- 专家拒绝（`verdict=reject`）会写一条 `kind=expert_reject` 的阻塞问题，并给每个决策记 1 轮；
+  同时把 `confirm_<x>` 从 `steps_done` 撤回，用户处理后必须由同一位专家重新独立确认。
+  若这次拒绝会让决策轮次超过 2，则不再重开该步骤（`blocking_reason=round_limit`），
+  G0 的轮次检查会失败——不自动选默认、也不进入第三轮。
 
 ### G0
 
@@ -69,13 +73,19 @@ expert_a → expert_b → expert_c → moderator → scribe → confirm_a → co
 G0.minutes_final         minutes-final.md 存在且非空
 G0.decisions_nonempty    decisions.json 至少 1 条
 G0.each_decision_confirmed  每条都有 confirmed_by_user（confirm/default）
-G0.no_open_blocking     没有 open/unresolved 的 blocking 问题
+G0.no_open_blocking     没有未处理的 blocking 问题（除 answered/default_adopted/resolved/closed 外都算未处理）
 G0.decision_rounds_le_2 问题与决策 rounds_used 均 ≤ 2
 G0.experts_confirmed    a/b/c 都有有效确认且无 reject
 G0.scribe_ne_moderator  书记与主持模型均已知且不同
 ```
 
 - 问题文件损坏时 `G0.no_open_blocking` 直接失败（不能当作"没有阻塞"）。
+- 证据文件"能解析但不是数组"同样算无效：`questions.json` 不是数组时按有阻塞处理，
+  `decisions.json` 不是数组时 `decisions_nonempty` / `each_decision_confirmed` 直接失败。
+- 用户动作必须完整：`confirmed_by_user` 需要合法的 `kind`（confirm/default）、非空 `text`
+  和时间戳；只有类型、没有内容的记录不算确认。
+- 专家确认必须可归因：记录里的 `expert` 必须与角色一致，`model` 必须等于该角色被分配的模型，
+  且带 `verdict` 与 `at`。别的专家或别的模型代写的确认一律不算。
 - `conclude` 通过才写 `status=concluded`；失败时若之前是 concluded，会改回
   `awaiting_user(blocking_reason=g0_failed)`，不保留过期通过状态。
 - `conclude` 不写任何用户确认或专家确认。
@@ -87,8 +97,13 @@ G0.scribe_ne_moderator  书记与主持模型均已知且不同
 - 专家与主持要求 `tier=top`，书记允许 `top|advanced`；书记与主持必须不同；
   模型需要存在、provider 已配置，`availability` 不能是 `blocked/unavailable`。
 - 任一条件不满足都会给出明确错误，不会用示例结果冒充真实调用。
-- 复用 `adapters/index.mjs` 与 `clampEffort`；提示词要求只读，且 provider 显式声明
-  `capabilities.readonly_mode=false` 时拒绝执行（不静默地跑在会写盘的模式下）。
+- 只读：Studio 每次调用都用"只读 provider 副本"，把能强制只读的 adapter 钉死在只读模式
+  （`claude-cli` → `--permission-mode plan` + 仅 `Read`；`codebuddy-cli` → `plan`；
+  `codex-cli` → `sandbox=read-only`）。显式 `capabilities.readonly_mode=false` 的渠道
+  （如 Cursor 的 `--force`）直接拒绝；既没声明、又无法强制只读的渠道也拒绝，不静默执行。
+  该判定只作用于 Studio，`flow.mjs` 与既有 adapter 行为不变。
+- 书记纪要与机器 JSON 分离：`minutes-final.md` 只写正文，末尾的控制 JSON 不落进纪要；
+  正文为空时整步失败（不能拿空的"纪要"去过 G0）。决策由书记一次产出，重跑时替换而非追加。
 
 ### CLI
 
@@ -110,7 +125,7 @@ agentline studio status   [--id <id>] [--json]
 
 - `GET /agentline/studio?project=P[&id=S]`：只读。列表来自 `lib/studio.mjs`，详情附带
   角色矩阵与实时求值的 G0；`readStudio` 的 `missing/empty/corrupt` 原样返回为
-  `ok:false + state`，不与空列表混淆。
+  `ok:false + state`，不与空列表混淆。`project` 必须是真实存在的目录，否则 400。
 - `POST /agentline/studio`：body `{ project, action, id, ... }`，只允许
   `new|run|answer|conclude`，校验会话 ID、必填输入与 answer 二选一后，
   用**参数数组** spawn 一条 CLI；每次请求恰好一次调用，不经 shell 拼接。
@@ -121,7 +136,8 @@ agentline studio status   [--id <id>] [--json]
 - **Studio 页**：左列真实会话列表（按项目重新读取）+ 新建表单；右侧展示角色、会话状态、
   下一步、问题（回答 / 采用默认）、决策（确认 / 采用默认）、三位专家确认、G0 逐项结果。
   操作按钮在存在 open blocking 问题时禁用，并用 tooltip 说明原因；操作失败显示原因、不自动重发；
-  项目切换会清空上一个项目的会话状态。
+  项目切换会清空上一个项目的会话状态。会话读取失败时错误信息附带 `missing/empty/corrupt` 状态，
+  与"该项目没有会话"的空态区分开。
 - **设置页 → 模型目录**：固定 5 个渠道分组（Claude / Codex / CodeBuddy / Cursor / Gemini，
   有未知 provider 时追加"其他渠道"），每组可折叠、空组可见；列固定为
   模型 / 渠道 / id / 档位 / 身份 / 可用性 / 来源；支持渠道筛选与搜索；缺失值显示"未知"，
@@ -151,19 +167,34 @@ Push-Location orchestrator; try { & npm test } finally { Pop-Location }
 - `studio-cli`：真实 spawn CLI（临时仓库 + `--adapter-module` 假 adapter），覆盖
   new/status、重复 ID、非法路径、每次 run 仅一次调用、进程重启后从磁盘恢复、失败不推进、
   阻塞问题不能跳过、answer 与 default 分别记录、多问题全部处理、决策确认、三次独立专家确认、
-  conclude 通过/证据缺失失败、轮次上限。
+  conclude 通过/证据缺失失败、轮次上限、专家拒绝后必须重新独立确认、无法保证只读的渠道拒绝建会话。
 - `studio-g0`：先构造完整证据求值通过，再逐项破坏（纪要、决策非空、用户确认、任一专家确认、
   专家 reject、open blocking、轮次 >2、书记=主持、主持缺失、questions.json 损坏），
-  以及通过后修改证据必须重新求值为失败。
+  以及通过后修改证据必须重新求值为失败；另覆盖"别人代写/别的模型写的确认不算"、
+  "确认记录缺内容或时间不算"、"questions.json 不是数组不能证明无阻塞"。
 - `studio-ui`：用最小 React 运行时真实执行 `client.js` 的 `apply` 与 `Cockpit` 渲染，
   驱动点击/输入；`POST /agentline/studio` 走真实插件路由并统计 fake CLI 调用次数。
   覆盖五渠道七列、折叠/筛选/搜索、11 行角色及未知值、真实/空/错误/项目切换状态、
   四项操作各一次调用、五 Tab/Inbox/项目组合/旧任务/未实现阶段。
 - 全部测试只用系统临时目录；不读写仓库内 `.collab/studio`，不需要任何真实模型账号。
 
+本次修订所处的执行环境禁用了 shell（Bash/PowerShell 均无审批可用），因此**未能在本机重跑**
+上述命令；改动按 `node --check` 的语法约束与逐条断言的语义做了静态核对。CI 会跑
+`acceptance.md` 里的 5 条命令，若有失败按输出定位。
+
+## 本轮修订（针对 review 的 5 条 findings）
+
+| finding | 原因 | 修正 |
+|---|---|---|
+| P1 只读未被保证 | 只检查 `readonly_mode === false`，而现有 4 个 provider 都没声明该字段，Codex 还是 `sandbox=workspace-write`，等于默认放行可写渠道 | 新增 `readonlyProvider` / `assertReadonlyProvider`：能强制只读的 adapter 钉死只读参数，其余必须显式声明 `true`，`false` 或无声明一律 `E_READONLY_UNAVAILABLE` |
+| P1 G0 证据不严 | `decisions.json` / `questions.json` 解析成功但不是数组时被当成空；`confirmed_by_user` 只看 `kind`；专家确认不绑定角色模型 | 无效结构单独标记 `questionsInvalid/decisionsInvalid` 并让对应 check 失败；用户动作要求 `kind + 非空 text + at`；确认要求 `expert`、`model` 与角色分配一致 |
+| P1 确认/轮次不可恢复 | 专家拒绝后无法重新确认，拒绝不计轮次，`run` 会继续往下走 | 拒绝写阻塞问题 + 决策记 1 轮 + 撤回该确认步骤；轮次超限则停在 `awaiting_user(round_limit)` |
+| P2 空/损坏会话与错误混淆 | 插件不校验 project，UI 错误文案没有状态信息 | 路由校验 project 必须是真实目录；详情错误附带 `missing/empty/corrupt` 中文状态，仍与空列表空态区分 |
+| P2 纪要与机器 JSON 混写 | `minutes-final.md` 整段写入模型输出（含控制 JSON），G0 只判非空；书记重跑会追加旧决策 | 新增 `splitModelOutput` 只落正文，正文为空则整步失败；决策改为替换写入 |
+
 ## 已知边界
 
 - Blueprint / Build 新控制面不在本任务范围；Blueprint 页面仍为只读"未实现"。
-- adapter 层没有统一的只读隔离能力，因此只对显式声明 `readonly_mode:false` 的 provider 拒绝执行，
-  其余渠道依赖提示词约束；需要更强的隔离时应由 provider 能力字段扩展（P7/P8）。
+- 只读是"按 adapter 能力强制 + 显式声明"：`gemini-cli` 当前没有可钉死的只读开关，若把它配成
+  Studio 角色会明确报错，需要先在 provider 配置里声明或补 adapter 能力（P7/P8）。
 - `--adapter-module` 仅作为可注入 adapter 的接缝，正常使用不需要。
