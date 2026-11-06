@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { withInputLock } from './contracts/input-lock.mjs'
+import { appendInputEvent } from './input-ledger.mjs'
 
 const KINDS = new Set(['note', 'amendment', 'answer'])
 
@@ -33,6 +34,7 @@ export function appendInput(taskDir, { kind, text, by = 'user', meta = null }) {
       ...(meta ? { meta } : {}),
     }
     fs.appendFileSync(inputsPath(taskDir), JSON.stringify(entry) + '\n', 'utf8')
+    appendInputEvent(taskDir, { event: 'input.append', entry })
     return entry
   })
 }
@@ -66,6 +68,7 @@ export function markConsumed(taskDir, ids) {
     const tmp = inputsPath(taskDir) + '.tmp'
     fs.writeFileSync(tmp, all.map((i) => JSON.stringify(i)).join('\n') + '\n', 'utf8')
     fs.renameSync(tmp, inputsPath(taskDir))
+    appendInputEvent(taskDir, { event: 'input.consume', ids: [...set] })
   })
 }
 

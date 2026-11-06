@@ -16,6 +16,7 @@ import { evaluateMerge } from './merge-policy.mjs'
 import { ensureTaskWorktree } from './worktree.mjs'
 import { acquireTaskLock, releaseTaskLock, acquireCapacity, releaseCapacity } from './registry.mjs'
 import { readWriteScope } from './scope.mjs'
+import { proveTermination } from './contracts/termination.mjs'
 
 export const STEP_ORDER = ['design', 'dev', 'ci', 'review', 'pr']
 
@@ -79,7 +80,7 @@ export async function runStep({
     if (!r.ok) return fail(r.state.blocked_reason)
     await commitAll(repo, `stage(design): task ${taskId}`)
     const next = setStatus(taskDir, taskId, 'designed', 'step:design')
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model }
+    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, record: r.record }
   }
 
   if (chosen === 'dev') {
@@ -89,7 +90,7 @@ export async function runStep({
     if (!r.ok) return fail(r.state.blocked_reason)
     await commitAll(repo, `stage(dev): task ${taskId}`)
     const next = setStatus(taskDir, taskId, 'implemented', 'step:dev')
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model }
+    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, record: r.record }
   }
 
   if (chosen === 'ci') {
@@ -117,13 +118,13 @@ export async function runStep({
     await commitAll(repo, `stage(review-r${round}): ${verdict?.verdict || 'unknown'} (task ${taskId})`)
     if (verdict?.verdict === 'pass') {
       const next = setStatus(taskDir, taskId, 'reviewed', 'step:review', { review_round: round })
-      return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: 'pass' }
+      return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: 'pass', record: r.record }
     }
     const next = setStatus(taskDir, taskId, 'reviewable', 'step:review', {
       review_round: round + 1,
       review_feedback: verdict?.verdict || 'needs_revision',
     })
-    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: verdict?.verdict || 'needs_revision' }
+    return { ok: true, step: chosen, status: next.status, next: nextStep(next), model: r.model, verdict: verdict?.verdict || 'needs_revision', record: r.record }
   }
 
   if (chosen === 'pr') {
@@ -162,12 +163,20 @@ function copyTaskIntoWorktree(mainRepo, worktreeRepo, collabDir, taskId) {
   fs.cpSync(src, dst, { recursive: true, force: true })
 }
 
+function terminationProofFor(runDir) {
+  let live = null
+  try { live = JSON.parse(fs.readFileSync(path.join(runDir, 'live.json'), 'utf8')) } catch { /* no live */ }
+  if (!live || !live.pid) return { status: 'unknown', pid: null, reason: 'no_live_record' }
+  return proveTermination({ pid: Number(live.pid), guard: live.guard || null })
+}
+
 /**
  * Minimal Supervisor loop for one task.
  *
  * P4.2: creates/reuses a worktree, takes the task lock, acquires an execution
- * slot before dev/review, and writes a step ledger. It still does not replace
- * runFlow; flow.mjs remains the legacy/full Build entry point.
+ * slot before dev/review, and writes a step ledger. P4.3: a blocked task is
+ * only resumed when the process-tree termination proof succeeds; otherwise it
+ * stays blocked/unknown.
  */
 export async function runBuild({
   config, repo, taskId, runnerPath, adapterFactory, log = console.log, projectCfg = {},
@@ -197,8 +206,26 @@ export async function runBuild({
     for (let i = 0; i < maxSteps; i++) {
       const st = readState(runDir)
       const step = nextStep(st)
-      if (step === 'done' || step === 'resume') {
-        return { ok: step === 'done', status: st?.status || 'missing', next: step, steps: completed, repo: runRepo }
+      if (step === 'done') {
+        return { ok: true, status: st?.status || 'done', next: 'done', steps: completed, repo: runRepo }
+      }
+      if (step === 'resume') {
+        if (st?.blocked_reason !== 'interrupted') {
+          return { ok: false, status: 'blocked', next: 'resume', reason: st?.blocked_reason || 'blocked', steps: completed, repo: runRepo }
+        }
+        const proof = terminationProofFor(runDir)
+        if (proof.status !== 'proven_dead') {
+          appendStepEvent(runDir, { event: 'resume.refused', task: taskId, proof: proof.status, reason: proof.reason })
+          return { ok: false, status: 'blocked', next: 'resume', reason: `termination_${proof.status}`, proof, steps: completed, repo: runRepo }
+        }
+        const back = (st.interrupted && st.interrupted.from) || 'designed'
+        writeState(runDir, {
+          ...st, status: back, blocked_reason: null, interrupted: null,
+          updated_at: new Date().toISOString(),
+          history: [...(st.history || []), { at: new Date().toISOString(), from: 'blocked', to: back, by: 'step:resume' }],
+        })
+        appendStepEvent(runDir, { event: 'resume.accepted', task: taskId, to: back, proof: proof.reason })
+        continue
       }
 
       if (step !== 'design' && !capacity) {
@@ -222,6 +249,7 @@ export async function runBuild({
       appendStepEvent(runDir, {
         event: 'step.end', task: taskId, step, ok: r.ok, status: r.status,
         next: r.next, reason: r.reason || null,
+        model: r.model || null, run_ref: (r.record && r.record.log_ref) || null,
       })
       completed.push(r)
       if (!r.ok) return { ok: false, status: r.status, next: r.next, reason: r.reason, steps: completed, repo: runRepo }
