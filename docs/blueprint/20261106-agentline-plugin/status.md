@@ -1,56 +1,46 @@
 # Blueprint 20261106 — AgentLine 插件状态
 
-状态：**契约修补 v5 完成；Review v5 = REVISE；无新的用户裁决**
+状态：**契约修补 v6 完成；Review v6 = REVISE；仅剩 S1 范围裁决 + POSIX 判空收口**
 日期：2026-11-06
 
 ## 已完成
 
-- `brief.md`：完整 Blueprint 需求。
-- `design-v1.md` / `review-v1.md`：v1。
-- `design-v2-delta.md` / `review-v2.md`：v2。
-- `design-v3-delta.md` / `review-v3.md`：v3。
-- `design-v4-contract.md` / `review-v4.md`：D1–D4 后的契约收口。
-- `design-v5-contract.md` / `review-v5.md`：输入账本、K 恢复、T 缓存、旧 CLI drain、D3 修补。
+- `design-v1.md` / `review-v1.md`：完整设计 v1。
+- `design-v2-delta.md` / `review-v2.md`：第 2 轮。
+- `design-v3-delta.md` / `review-v3.md`：第 3 轮。
+- `design-v4-contract.md` / `review-v4.md`：D1–D4 后契约收口。
+- `design-v5-contract.md` / `review-v5.md`：输入账本、K 恢复、T 缓存、drain、D3。
+- `design-v6-contract.md` / `review-v6.md`：系统 note、晚到归档、POSIX 终止证明、旧 cmdRun 后代。
 - `mockups/index.html`：含多项目/多任务的静态 UI mockup。
-- `docs/studio/20261106-agentline-plugin/decisions.md`：D1=A、D2=人工登记、D3=显式追加、D4=本机 CLI 信任。
 
-## Review v5 结论
+## Review v6 结论
 
 已关闭：
 
-- **B4**：K 恢复（recording 阶段、预计算 blob、R-TXN）；
-- **B4 缓存**：T-PURE + 动态 `T.local_evidence`；
-- **D3**：Build 的 `L_e`、Blueprint 的 `L_bp`、调度和 G1/T gate 贯通；
-- M3/M5、B5、B2/G2、M2 保持关闭。
+- B1-1 系统 note 的确定性 ID、P1b 持久化、P2 去重、W0 恢复；
+- B1-2 晚到归档：主/late 独立目录与 ref，W1b-L 唯一结果；
+- C_auth 包含 initial adopt；
+- B4 K 恢复、T 缓存、D3 保持关闭；
+- M4 入口退出后的记录保留、来源 g/h/i 已补计数对象。
 
 仍剩：
 
-### B1-1 输入账本
+1. **S1 用户范围裁决**：运行期间的 L-foreign 输入兼容，以及“从未观测、无残留证据的旧执行者”是否排除出 drain 保证。
+2. **B6-2 POSIX 判空条件**：`Cand = ∅ → proven_dead` 需要进程枚举完整性前提；`hidepid`、权限可见性变化、枚举期间进程创建/退出都会使“扫描无报错”不等于完整快照。无法建立完整性时必须返回 `unknown`。
+3. 实现前契约整理（Minor）：L-cur 锁接入、reserved ID 优先级、清零验收夹具、合并稿清理。
 
-- 系统 note 的正常路径没有在 beforeCall 前完成 `input.intent` 与实际输入 id 的绑定，会触发 `G_INPUT_UNRECONCILED`；
-- 旧 CLI 在 `markConsumed` 整读与 rename 之间追加输入，可能丢失原文；旧 CLI 不写 `input.append`，不能靠下一次对账自愈。
+## 需要用户裁决（仅 S1，两项）
 
-### B1-2 晚到归档
+### S1-1 输入兼容
 
-- `call.archive_late` 复用原 `calls/<call_id>/` 目录，但原归档不可变；
-- “late 已写、end 未写时再次崩溃”没有唯一恢复结果。
+- **A（推荐）**：接受运行期间不支持 L-foreign 输入；新版输入命令与 runStep 通过输入锁互斥；不修改 `inputs.mjs` 的 append-only 格式。
+- B：追加授权修改 `inputs.mjs` 为 append-only 状态事件，同时保留回滚格式转换。仍不能覆盖无证据的旧外部写入者。
 
-### B1-3 POSIX 终止证明
+### S1-2 旧执行者保证
 
-- 受守护的 Windows Job 路径已解决漏后代；
-- 无守护 POSIX 回退遇到外部旧 subreaper 接管时，无法仅凭 `(pid,ppid,create_time)` 排除；
-- 必须返回 `unknown`，不能放行。
+- **A（推荐）**：接受把“从未被观测、且没有残留证据的旧 L-foreign 执行者”排除出 drain 保证；可证明的旧执行者仍保持非零/unknown，直到终止证明。
+- B：不接受排除；需要额外机制才能覆盖无证据旧执行者（范围更大，需单独立项）。
 
-### M4 旧 CLI drain
+## 当前结论
 
-- 旧 `cmdRun` 没有 admission/任务锁/job 登记；
-- 入口进程被杀后，模型子进程仍存活时，来源 (f) 找不到旧入口，drain 可能误报 0；
-- 需要入口退出后仍保持非零或 `unknown`，直到后代终止被证明。
-
-## 是否可进入实现切分
-
-**no。** B1 三组和 M4 仍需局部契约修补；不需要重开架构、不需要新用户裁决。
-
-## 当前建议
-
-继续一次只修 B1-1/B1-2/B1-3/M4 的局部修补，然后再复核并拼装最终合并稿。UI mockup 已包含多项目、多任务，可供同时评审。
+B6-2 是正确性收口，不能通过人工批准跳过。S1 裁决后，只需一次局部收口（POSIX 判空 + Minor 合并稿），即可尝试进入实现切分。
