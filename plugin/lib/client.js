@@ -623,7 +623,7 @@ window.__ModuleLoader__.load({
         const focusText = human.length ? '⏸ ' + label(focus) + ' designer 等待回答' :
           other.length ? '⛔ ' + label(focus) + ' 阻塞：' + focus.reason :
           prOpen.length ? '✅ ' + label(focus) + ' 评审通过，等待合并许可' :
-          focus ? '▶ ' + runningText(focus) : '没有需要你处理的事项。'
+          focus ? '▶ ' + runningText(focus) : sourceErrors.live || (liveReady ? '没有需要你处理的事项。' : '读取中…')
         const cards = [
           ...other.map((it) => ({ it, tag: '阻塞', style: ' bad', text: '原因：' + it.reason, button: '查看任务' })),
           ...human.map((it) => ({ it, tag: '问题', style: '', text: 'designer 等待回答；在 Build 详情中回答后 flow 会继续', button: '去回答' })),

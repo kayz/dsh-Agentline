@@ -20,3 +20,7 @@
 执行环境限制：工具参数指定 pwsh 后实际仍启动 Windows PowerShell 5.1，且当前工具环境无法找到 pwsh 7。因此未将其视为规定的 pwsh 验收环境；AC-1 至 AC-10 通过 Node 从验收 Markdown 在内存提取并执行原 JavaScript 断言，AC-11 直接执行同一 Node 测试命令，未创建仓库内脚本。完整 pwsh 7 命令仍需下游复核。用户明确禁止执行 git 命令，因此未执行 AC-12 的两条 git 范围检查，未声称已通过该项；写入操作仅针对上述两个产品路径及本报告。DSH 内的人工布局与操作抽查留给 review。
 
 沿用设计已知限制：`pipeline.mjs` 的 `st.origin?.kind || st.origin?.blueprint ? 'blueprint' : …` 存在运算符优先级问题，任意非空 origin.kind 都可能被核心标记为 blueprint；UI 原样展示，未越过 write_scope 修改核心。Studio/Blueprint 状态机和 gate 详情仍未实现。
+
+本次复核保留工作区已有的五个 Tab、Build 操作和只读 Host 路由，仅补充修正 `client.js` 首页“现在卡在哪”的兜底分支：summary 无待处理项但 live 请求尚未完成时显示“读取中…”，live 失败时显示该数据源错误，成功且为空才显示“没有需要你处理的事项。”。已有阻塞、问题和合并待办仍优先展示，符合 design.md 对加载、错误和空数据分支的要求；本次没有再次修改 `index.js`。
+
+修正后重新执行 AC-1 至 AC-10 的全部原 JavaScript 断言，退出码均为 0，输出与验收期望一致；未修改验收断言。补充内存快照验证 live 加载、失败、成功为空及问题优先级，输出 `OK live loading+failure+empty priority`。本次 orchestrator `node --test` 退出码为 0，汇总仍为 71 tests、64 pass、0 fail、7 skipped。再次确认两个产品文件无 BOM，且不存在 `scripts/check-fast.ps1`。工具仍未提供可用的 pwsh 7，故通过 Node 直接执行原断言；未执行 AC-12 的 git 命令，未创建仓库内测试文件，DSH 人工观察仍待 review。
