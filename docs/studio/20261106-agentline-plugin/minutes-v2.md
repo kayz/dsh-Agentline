@@ -16,7 +16,7 @@
 
 - 三阶段方向正确，但**路线顺序反了**：当前最痛的是 Build 出错依赖人看日志和手工 resume，而 Studio/Blueprint 尚无核心实现；三阶段只读外壳不应先于核心状态机。
 - 用户界面不应是三个平铺页面，而应是**“待我处理”的 Inbox + 一条阶段进度条**：每条是一个问题、默认选项和证据链接。
-- 现有错误分类不足以做规则引擎：子串匹配有误判，quota/session/429 混为 `rate_limit`，裸 403 未识别；`rate_limit` 会自动换候选，与“Studio/Blueprint 禁止静默降级”冲突。
+- 现有错误分类不足以做规则引擎：A 指出 context/auth 子串误匹配、quota 与 rate_limit 被合并、多个失败类别缺少动作；B 另外指出 session limit、裸 403 未独立分类。 `rate_limit` 会自动换候选，与 Studio/Blueprint 禁止静默降级冲突。
 - 当前配置不能满足 Blueprint 角色隔离：design/review 同厂商，review 也不一定是顶级；需要用户先决定模型供应。
 - 明确核心/插件边界：核心拥有所有改变下一步行为的状态（阶段状态机、gate、错误动作、model_resolved）；插件只做展示、收集输入、调用公开 CLI。
 - 给出 G0 Studio、G1 Blueprint、Build 的 gate 条件，以及“批准绑定内容哈希”的要求。
@@ -55,7 +55,7 @@
 |---|---|---|---|
 | 控制面落点 | 状态机/gate/错误策略归核心，provider 层在核心下 | 统一入口 + 独立控制面模块，公共运行层分开 | 同仓新增 studio/blueprint 模块，flow 零侵入 |
 | 0.18 首切片 | 先做 Build 错误规则化、自动恢复、Inbox | 先做能力查询、只读 summary、版本化 DTO、模型身份 | 先裁断控制面落点，再谈目录/路由 |
-| 轮次耗尽 | `awaiting_user`，可授权加 1 轮 | 三轮硬停 + `blocked(E_ROUND_LIMIT)`，用户裁决后新会话 | 未给出独立方案 |
+| 轮次耗尽 | 进入 `awaiting_user`；每次授权只加 1 轮，可重复授权并逐次写 deviations | 三轮硬停 + `blocked(E_ROUND_LIMIT)`，用户裁决后新会话 | 未给出独立方案 |
 | 错误自动恢复 | `invalid_output` 硬停；rate_limit 可在 reset ≤30min 内等待 | 格式修复最多 1 次；rate_limit 最多 2 次、单次 ≤60s、累计 ≤120s；CI 修复 1 次 | 强调未知副作用不得自动重放 |
 | Blueprint 测试架构师模型 | B6 要求三角色两两不同，但默认方案允许复用 | 三角色均 top 且两两不同 | 未给出例外 |
 
@@ -181,4 +181,5 @@ Studio/Blueprint 控制面落在哪里？
 | A | accept_with_notes | 非阻塞备注已纳入 v2；无 blocking |
 | B | 待复核 | 已按 blocking 修正模型档位、测试架构师冲突、G0 默认值/轮次/异议规则；等待复核 |
 | C | accept_with_notes | 原始输出截断；只使用可见部分 |
+
 
