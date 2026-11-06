@@ -333,14 +333,6 @@ Write-Output 'OK write scope'
 
 期望：退出码 0，输出 `OK write scope`；相对既有基准恰好修改两个允许的产品文件。基准不存在或读取失败必须失败，不得改用 HEAD 规避校验。（此命令由下游执行，design 角色不执行 git。）
 
-```pwsh
-$untracked = @(git ls-files --others --exclude-standard)
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if ($untracked.Count -ne 0) { throw ('Unexpected untracked paths: ' + ($untracked -join ', ')) }
-Write-Output 'OK no untracked files'
-```
-
-期望：退出码 0，输出 `OK no untracked files`（没有新增的未忽略文件）。front matter 的 write_scope 必须仍仅包含上述两个文件；不能为通过检查扩大范围。
 
 ## AC-14 未跟踪文件检查（第二段）
 
@@ -363,5 +355,6 @@ Write-Output 'OK no untracked files'
 3. 对话头部 AG 灯弹层里点一个任务 → 驾驶舱切到 Build Tab 并选中该任务。
 4. 在没有 `.collab/studio`、`.collab/blueprint` 的项目里，Studio/Blueprint 页显示“这个项目还没有 … 记录”，没有任何轮次、gate、示例模型名。
 5. Build 详情里 ⏸ / ⏹ / note / amend / 回答 / 确认合并 / 预授权合并 / 分档检查都还在，并且能用。
+
 
 

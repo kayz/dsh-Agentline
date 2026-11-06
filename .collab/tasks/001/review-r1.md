@@ -87,3 +87,48 @@ CI 行号均指本目录 ci-results.json；产品文件行号相对仓库根。�
 2. **P2 — AC-12：相对基准的写入范围检查缺少执行证据。** acceptance.md:323–334 要求第一段执行 `git diff --name-only 9efb19992f3d68f760082f0cda600c5e6d6b1ee9` 并校验路径集合，输出 `OK write scope`。本轮 CI:118–124 与 127–133 都只有 `OK no untracked files`，不足以确认第一段通过。ci-runner.ps1:45 在进入下一 AC 标题时用最后一个 fenceBody 覆盖 Command，54 行在第二代码块开始时重置 fenceBody，解释了同一 AC 多段命令丢失的风险。请编排方补执行 acceptance.md 第一段原命令并记录退出码及完整输出，保留现有未跟踪检查证据；review 按用户要求不执行 git，不修改断言。未据此断言存在越界产品改动。acceptance.md 第一段 expected 列表包含 `.gitignore`，本报告沿用原断言，不自行更改规格。
 
 历史 AC-9 缺首段渲染、AC-12 缺第二段未跟踪检查的问题已由当前 CI 补足；本轮 AC-12 缺的是第一段范围检查。仅追加本文件并更新 verdict-r1.json；未修改历史小节、review.md/verdict.json、产品、规格、实现说明或 state/run。人工观察按 acceptance.md 约定不计自动判定；本轮未执行 DSH UI 抽查，也未以只读审查替代真实浏览器观察。
+
+## 结论
+
+本轮（CI ranAt：2026-11-06T18:16:02.7132839+08:00）结论：**needs_revision，通过 13/14**。全部 14 条 CI 命令退出码均为 0；独立审查发现 AC-6 对应的错误恢复仍有缺陷，不能仅凭静态文案检查判通过。此前首次 projects 失败不传播错误的问题已有修正，AC-9/AC-12 的执行证据本轮也已齐全。
+
+验证的 git SHA：`92fedaa20d13378e89f72f829acedb32cffff8f5`。只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，解压 loose commit 并校验 SHA1；没有执行 git 命令。index.js 与该 commit 的 blob 换行归一化后相同；client.js 工作区与 commit 不同，差异区间为原 460–805 行 / 当前 460–818 行。因此本结论针对工作区，不能声称该 SHA 单独包含全部被评审实现。实际文件 SHA256：
+
+- client.js：`527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a`
+- index.js：`6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157`
+- ci-results.json：`42d4f8f844c507034d99f2502a36732ae9ac5e312f4464e45cf79ed26a1ffc6e`
+
+执行类证据全部直接采用编排方 CI；未重跑验收、未执行 git、未创建测试或临时脚本。补充验证只在内存中执行原 loadProjects 函数以核对错误恢复控制流。brief 未另指定验收报告路径。仅追加 review-r1.md、更新 verdict-r1.json，历史小节保留。
+
+## 逐条 AC 结果
+
+CI 行号均指本目录 ci-results.json；产品行号指 plugin/lib 下对应文件。
+
+| AC | 结论 | 证据 |
+|---|---|---|
+| AC-1 | 通过 | CI:10–16，exitCode=0，无语法错误输出。 |
+| AC-2 | 通过 | CI:19–25，exitCode=0，无语法错误输出。 |
+| AC-3 | 通过 | CI:28–34，OK tabs+home；client.js:254、565–609、630–679、994–1001，核对持久化、首页真实数据、五页分派；Tab 样式含 overflow-x:auto。 |
+| AC-4 | 通过 | CI:37–43，OK legacy ops；client.js:272–385、510–529、585–609、845–987，核对项目/任务/日志请求隔离、卸载保护、阶段轨迹、继续运行、合并二次确认、低档预授权、分档、ledger、控制/回答、执行记录和日志。 |
+| AC-5 | 通过 | CI:46–52，OK no mock data；client.js:683–717、932–941，会话、目录、模型由响应字段投影，模型字段全部缺失时省略，未从评审或合并推断 gate。 |
+| AC-6 | 不通过 | CI:55–61 虽输出 OK empty states，但只检查文案；client.js:460–473、490–491、575、581–583、761 的恢复路径与 design.md:279 矛盾，见问题清单。 |
+| AC-7 | 通过 | CI:64–70，OK settings+slash；client.js:675–679、702–717、758–810，路由/矩阵迁入，命令只复制、未实现入口无执行按钮，Provider 并集与真实 availability 计数共用目录错误状态。恢复缺陷统一计入 AC-6。 |
+| AC-8 | 通过 | CI:73–79，OK host routes 14；index.js:855–874，新路由只转发只读模块，857、868 拒绝非 GET；872–873 使用原始 cache 构造目录，仅返回归一化目录和发现概况。 |
+| AC-9 | 通过 | CI:82–88 的 OK render 5 tabs 补足首段；91–97 的 OK data projection+navigation 覆盖第二段；client.js:307–312、602–609、683–717 与跨项目定位、空/已有会话/失败投影相符。 |
+| AC-10 | 通过 | CI:100–106，OK host routes runtime；原断言覆盖空/已有会话、发现目录、四种写方法 405、旧 projects 及夹具目录请求前后一致；index.js:855–874 与之相符。 |
+| AC-11 | 通过 | CI:109–115，exitCode=0；输出 # tests 71、# pass 71、# fail 0、# skipped 0。 |
+| AC-12 | 通过 | CI:118–124，exitCode=0、OK write scope，已补足指定基准的范围检查；沿用 acceptance.md:323–334 的原 expected（含 .gitignore），不自行改规格。 |
+| AC-13 | 通过 | CI:82–88，exitCode=0、OK render 5 tabs；client.js:254 默认 home，994–1001 分派五页。 |
+| AC-14 | 通过 | CI:127–133，exitCode=0、OK no untracked files。 |
+
+## 问题清单
+
+1. **P2 — AC-6：项目列表短暂失败后，设置页的角色路由在项目列表恢复时转为无限加载。** 在已有项目 A、设置 Tab 保持打开时，10 秒 projects 轮询（client.js:575）失败会在 460–468 行设置错误，并清空 routing/draft。下一次轮询成功在 471–473 行清除错误，但 490–491 行保留当前项目 A，不触发项目变化。角色路由只在进入设置或 project 改变时读取（581–583 行），没有路由轮询。结果 routing 仍为 null、sourceErrors.routing 已为空，761 行持续显示“读取中…”，保存按钮禁用。类似地，单独 routing 请求失败的错误也会被成功的 projects 轮询清除，未伴随路由重试。违反 design.md:279 对失败不得伪装成无限加载、区块错误隔离和恢复的要求。
+
+   独立内存验证执行当前文件原 loadProjects 函数，依次注入失败与项目 A 的成功响应，输出：
+   `after projects failure {"routing":null,"draft":{},"errors":{"projects":"temporary registry outage","pipeline":"项目读取失败：temporary registry outage","routing":"项目读取失败：temporary registry outage"}}`
+   `after recovery same project {"routing":null,"draft":{},"errors":{"projects":"","pipeline":"","routing":""},"projectsReady":true}`
+   断言 routing===null、errors.routing==='' 均成立；project 没变，故 [tab,project] effect 不重跑。此为原函数的内存控制流验证，未声称 DSH 浏览器复现。请将项目注册列表错误与独立的路由读取状态隔离；恢复后应实际重新读取路由，或保留准确失败状态并提供设计要求的恢复路径，不能只清错误。重新进入设置或手动刷新可绕过当前问题，不消除自动轮询把失败伪装成无限加载的缺陷。
+
+DSH 人工布局/交互观察未执行，按 acceptance.md“人工观察（不作为自动判定）”不计失败。仓库无 scripts/check-fast.ps1。
+

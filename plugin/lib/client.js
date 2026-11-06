@@ -457,7 +457,20 @@ window.__ModuleLoader__.load({
         const p = await j('/agentline/projects')
         if (!view.current.alive || requests.current.projects !== n) return
         sourceError('projects', p && p.ok ? '' : failure(p))
-        if (!p || !p.ok) { setProjectsReady(false); return }
+        if (!p || !p.ok) {
+          const msg = failure(p)
+          sourceError('projects', msg)
+          sourceError('pipeline', '项目读取失败：' + msg)
+          sourceError('routing', '项目读取失败：' + msg)
+          setProjectsReady(false)
+          setPipeline({ ok: false, error: '项目读取失败：' + msg })
+          setRouting(null)
+          setDraft({})
+          return
+        }
+        sourceError('projects', '')
+        sourceError('pipeline', '')
+        sourceError('routing', '')
         const list = p.projects || []
         setProjects(list)
         setProjectsReady(true)
@@ -559,7 +572,7 @@ window.__ModuleLoader__.load({
         view.current.alive = true
         loadProjects()
         loadLive(); loadSummary(); loadNotices()
-        const timers = [[loadLive, 3000], [loadSummary, 5000], [loadNotices, 10000]].map(([f, ms]) => window.setInterval(f, ms))
+        const timers = [[loadLive, 3000], [loadSummary, 5000], [loadNotices, 10000], [loadProjects, 10000]].map(([f, ms]) => window.setInterval(f, ms))
         return () => { view.current.alive = false; view.current.epoch++; Object.keys(requests.current).forEach(begin); timers.forEach((it) => window.clearInterval(it)) }
       }, [])
 
@@ -802,7 +815,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'agl-body' },
           h('div', { className: 'agl-list' },
             tasks.length === 0
-              ? h('div', { className: 'agl-fine', style: { padding: '10px' } }, project && !listReady ? (err || '读取中…') : '暂无任务')
+              ? h('div', { className: 'agl-fine', style: { padding: '10px' } }, sourceErrors.projects ? '项目读取失败：' + sourceErrors.projects : project && !listReady ? (err || '读取中…') : '暂无任务')
               : tasks.slice().reverse().map((t) => {
                   const st = (t.state && t.state.status) || '?'
                   return h('div', {
