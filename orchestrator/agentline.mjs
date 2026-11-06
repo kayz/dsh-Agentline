@@ -33,6 +33,7 @@ import { sweepInterrupted, readLock, isPidAlive, REASON } from './lib/recovery.m
 import { requestStop, isStopRequested, clearControl } from './lib/control.mjs'
 import { buildSummary } from './lib/summary.mjs'
 import { readPipelineSummary, formatPipelineSummary } from './lib/pipeline.mjs'
+import { runStep, nextStep, runBuild } from './lib/step.mjs'
 import { runFlow } from './lib/flow.mjs'
 import { resolveTaskDir } from './lib/worktree.mjs'
 import { appendInput, readInputs, pendingInputs, readAttention } from './lib/inputs.mjs'
@@ -342,6 +343,37 @@ async function cmdFlow() {
   process.exit(code)
 }
 
+async function cmdBuild() {
+  const sub = args._[1] || 'step'
+  const located = resolveTaskDir(repo, taskId, { collabDir: config.collabDir, dirRel: config.worktree?.dir })
+  const taskDir = located?.dir || dir
+  if (sub === 'plan') {
+    const st = readState(taskDir)
+    log(JSON.stringify({ task: taskId, status: st?.status || 'missing', next: nextStep(st) }, null, 2))
+    return
+  }
+  if (sub === 'step') {
+    const r = await runStep({
+      config, repo: located?.repo || repo, taskId, step: args.step || null,
+      runnerPath: runnerPath(), log, projectCfg,
+    })
+    const out = { task: taskId, ...r }
+    if (args.json) log(JSON.stringify(out, null, 2))
+    else log(`${r.ok ? 'OK' : 'BLOCKED'} step=${r.step} status=${r.status} next=${r.next}${r.reason ? ' reason=' + r.reason : ''}`)
+    process.exit(r.ok ? 0 : 1)
+  }
+  if (sub === 'run') {
+    const r = await runBuild({
+      config, repo: located?.repo || repo, taskId, runnerPath: runnerPath(), log,
+      projectCfg, maxSteps: Number(args['max-steps'] || 10),
+    })
+    if (args.json) log(JSON.stringify({ task: taskId, ...r }, null, 2))
+    else log(`${r.ok ? 'DONE' : 'BLOCKED'} status=${r.status} next=${r.next}${r.reason ? ' reason=' + r.reason : ''}`)
+    process.exit(r.ok ? 0 : 1)
+  }
+  fail(`unknown build command: ${sub}`)
+}
+
 async function cmdMerge() {
   const permission = args.permission
   const useGrant = args.grant === true
@@ -516,6 +548,9 @@ function help() {
   node agentline.mjs roles show|set
   node agentline.mjs preflight
   node agentline.mjs pipeline summary [--json]
+  node agentline.mjs build step --task <id> [--step design|dev|ci|review|pr] [--json]
+  node agentline.mjs build run --task <id> [--max-steps 10] [--json]
+  node agentline.mjs build plan --task <id> [--json]
   node agentline.mjs run   --task <id> --role <design|dev|review>
   node agentline.mjs flow  --task <id> [--max-rounds 2] [--resume] [--in-place] [--no-wait] [--priority] [--base <ref>]
   node agentline.mjs merge --task <id> --permission "允许合并"
@@ -542,6 +577,7 @@ switch (cmd) {
   case 'init': await cmdInit(); break
   case 'preflight': await cmdPreflight(); break
   case 'pipeline': await cmdPipeline(); break
+  case 'build': await cmdBuild(); break
   case 'models': await cmdModels(); break
   case 'roles': cmdRoles(); break
   case 'status': cmdStatus(); break
