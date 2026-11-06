@@ -374,7 +374,7 @@ test('studio cli: round limit is explicit and refuses a third discussion round',
   assert.equal(ctx.readSession('s5').status, 'awaiting_user')
 })
 
-test('studio cli: two rounds are the hard cap and a third round is never started', (t) => {
+test('studio cli: two rounds are the hard cap and a third discussion round is never started', (t) => {
   const ctx = setup()
   t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
   newSession(ctx, 's8')
@@ -394,32 +394,93 @@ test('studio cli: two rounds are the hard cap and a third round is never started
     assert.equal(last.kind, 'expert_reject')
     // 用户处理后仍由三位专家重新独立确认，但轮次不能因此虚增
     assert.equal(ctx.run(['answer', '--id', 's8', '--question', last.id, '--text', '收窄到 P6']).status, 0)
+    return last.id
   }
   const decisionsOf = () => JSON.parse(fs.readFileSync(path.join(ctx.dir('s8'), 'decisions.json'), 'utf8'))
 
   rejectRound() // 第 1 轮 → 第 1 轮业务轮次
   assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [1, 1])
+  // 讨论已经结束、只剩确认：回答后必须还能继续，不能被“轮次耗尽”锁死
   assert.equal(ctx.readSession('s8').status, 'running')
-
   assert.equal(ctx.run(['run', '--id', 's8']).status, 0) // confirm_a 重新确认
   rejectRound() // 第 2 轮
   assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
-  const exhausted = ctx.readSession('s8')
-  assert.equal(exhausted.status, 'awaiting_user')
-  assert.equal(exhausted.blocking_reason, 'round_limit')
+  assert.equal(ctx.readSession('s8').status, 'running')
+  const before = ctx.callsList().length
+  const reconfirm = ctx.run(['run', '--id', 's8'])
+  assert.equal(reconfirm.status, 0, reconfirm.stderr || reconfirm.stdout)
+  assert.equal(ctx.callsList().slice(-1)[0], 'confirm_a')
+  assert.equal(ctx.callsList().length, before + 1)
 
-  // 轮次耗尽后不再调用任何角色，也绝不写出第 3 轮
-  const callsBefore = ctx.callsList().length
-  const third = ctx.run(['run', '--id', 's8'])
-  assert.notEqual(third.status, 0)
-  assert.match(third.stderr, /rounds exhausted/)
-  assert.equal(ctx.callsList().length, callsBefore, '轮次耗尽后不能再调用专家')
+  // 轮次耗尽后再次拒绝只能作为阻塞证据留下，绝不写出第 3 轮
+  const rejectedAgain = ctx.run(['run', '--id', 's8'])
+  assert.equal(rejectedAgain.status, 0, rejectedAgain.stderr || rejectedAgain.stdout)
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
+  const stuck = ctx.readSession('s8')
+  assert.equal(stuck.status, 'awaiting_user')
+  assert.equal(stuck.blocking_reason, 'expert_reject')
+
+  // 拒绝带来的阻塞问题必须先回答，run 不得绕过
+  const callsBeforeBlocked = ctx.callsList().length
+  const blockedRun = ctx.run(['run', '--id', 's8'])
+  assert.notEqual(blockedRun.status, 0)
+  assert.match(blockedRun.stderr, /awaiting_user/)
+  assert.equal(ctx.callsList().length, callsBeforeBlocked, '未回答阻塞问题前不能再调用角色')
   assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
 
   const failedG0 = ctx.run(['conclude', '--id', 's8'])
   assert.notEqual(failedG0.status, 0)
   assert.match(failedG0.stdout, /G0 FAIL/)
   assert.equal(ctx.readSession('s8').status, 'awaiting_user')
+})
+
+test('studio cli: an answered second-round reject can still be re-confirmed and pass G0', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  newSession(ctx, 's9')
+  for (let i = 0; i < 4; i++) assert.equal(ctx.run(['run', '--id', 's9']).status, 0)
+  const qs = JSON.parse(fs.readFileSync(path.join(ctx.dir('s9'), 'questions.json'), 'utf8'))
+  for (const q of qs) assert.equal(ctx.run(['answer', '--id', 's9', '--question', q.id, '--text', '按默认']).status, 0)
+  assert.equal(ctx.run(['run', '--id', 's9']).status, 0) // scribe
+  for (const id of ['D-1', 'D-2']) assert.equal(ctx.run(['answer', '--id', 's9', '--decision', id, '--text', '确认']).status, 0)
+  assert.equal(ctx.run(['run', '--id', 's9']).status, 0) // confirm_a
+
+  const decisionsOf = () => JSON.parse(fs.readFileSync(path.join(ctx.dir('s9'), 'decisions.json'), 'utf8'))
+  writeJson(ctx.fixtureCfg, { responses: { confirm_b: JSON.stringify({ verdict: 'reject', notes: '需要收窄' }) } })
+  const rejectAndAnswer = () => {
+    const r = ctx.run(['run', '--id', 's9'])
+    assert.equal(r.status, 0, r.stderr || r.stdout)
+    const all = JSON.parse(fs.readFileSync(path.join(ctx.dir('s9'), 'questions.json'), 'utf8'))
+    const last = all[all.length - 1]
+    assert.equal(last.kind, 'expert_reject')
+    const a = ctx.run(['answer', '--id', 's9', '--question', last.id, '--text', '收窄到 P6'])
+    assert.equal(a.status, 0, a.stderr || a.stdout)
+  }
+
+  rejectAndAnswer() // 第 1 轮
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [1, 1])
+  assert.equal(ctx.run(['run', '--id', 's9']).status, 0) // confirm_a 重新确认
+  rejectAndAnswer() // 第 2 轮，轮次到达上限
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2])
+
+  // 阻塞问题已回答：讨论不再需要新一轮，三位专家必须仍能各自独立确认
+  assert.equal(ctx.readSession('s9').status, 'running')
+  writeJson(ctx.fixtureCfg, {})
+  const before = ctx.callsList().length
+  for (const step of ['a', 'b', 'c']) {
+    const r = ctx.run(['run', '--id', 's9'])
+    assert.equal(r.status, 0, r.stderr || r.stdout)
+    assert.equal(ctx.callsList().slice(-1)[0], `confirm_${step}`)
+  }
+  assert.equal(ctx.callsList().length, before + 3)
+  assert.equal(ctx.readSession('s9').status, 'ready')
+  assert.deepEqual(decisionsOf().map((d) => d.rounds_used), [2, 2], '确认不产生新的业务轮次')
+
+  const pass = ctx.run(['conclude', '--id', 's9'])
+  assert.equal(pass.status, 0, pass.stdout + pass.stderr)
+  assert.match(pass.stdout, /G0 PASS/)
+  assert.match(pass.stdout, /G0\.experts_confirmed/)
+  assert.equal(ctx.readSession('s9').status, 'concluded')
 })
 
 test('studio cli: scribe and moderator resolved to the same model id are refused', (t) => {

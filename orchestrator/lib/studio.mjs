@@ -22,6 +22,19 @@ export const STUDIO_ROLES = ['expert_a', 'expert_b', 'expert_c', 'moderator', 's
 export const EXPERTS = ['expert_a', 'expert_b', 'expert_c']
 export const STEPS = ['expert_a', 'expert_b', 'expert_c', 'moderator', 'scribe', 'confirm_a', 'confirm_b', 'confirm_c']
 export const CONFIRM_TARGET = { confirm_a: 'expert_a', confirm_b: 'expert_b', confirm_c: 'expert_c' }
+
+/**
+ * 轮次上限只约束“讨论轮次”：专家/主持/书记会开启新一轮讨论，
+ * 确认步骤只是对已落盘证据的独立表态，不产生新一轮，因此不受上限限制。
+ */
+function isConfirmStep(step) { return !!CONFIRM_TARGET[step] }
+
+/** 下一步是否还会开启新的讨论轮次（done 与确认步骤都不算）。 */
+function startsDiscussionRound(session) {
+  const step = currentStep(session)
+  return step !== 'done' && !isConfirmStep(step)
+}
+
 export const ROLE_LABEL = {
   expert_a: '专家 A', expert_b: '专家 B', expert_c: '专家 C', moderator: '主持', scribe: '书记',
 }
@@ -737,9 +750,10 @@ function statusAfterStep(session, questions, decisions, extra = {}) {
   const blocked = openBlocking(questions, false)
   if (blocked.length) return { status: 'awaiting_user', blocking_reason: `${blocked.length} 个阻塞问题待回答` }
   if (extra.reject) return { status: 'awaiting_user', blocking_reason: 'expert_reject' }
-  // 2/2 已用满或轮次无法证明时停住，不自动选默认、也不进入第三轮。
+  // 2/2 已用满或轮次无法证明、且下一步仍要开启讨论时停住：
+  // 不自动选默认、也不进入第三轮。讨论已结束、只剩确认时不算“还有阻塞”，可以继续。
   const exhausted = (decisions || []).filter((d) => roundsExhausted(d))
-  if (exhausted.length) {
+  if (exhausted.length && startsDiscussionRound(session)) {
     return {
       status: 'awaiting_user',
       blocking_reason: exhausted.some((d) => roundCount(d) === null) ? 'rounds_invalid' : 'round_limit',
@@ -770,23 +784,25 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
       : ''
     throw new StudioError('E_AWAITING_USER', `awaiting_user: ${blocked.map((q) => q.id).join(', ')} must be answered before running${extra}`)
   }
-  // 轮次耗尽（2/2）即硬停：不再调用任何角色，避免一次拒绝把轮次写成第 3 轮。
-  // rounds_used 缺失或不是整数时同样无法证明还有额度，一并拒绝。
-  const spent = r.decisions
-    .map((d) => ({ id: d.id, rounds: roundCount(d) }))
-    .filter((x) => x.rounds === null || x.rounds >= 2)
-  if (spent.length) {
-    throw new StudioError(
-      'E_ROUNDS_EXHAUSTED',
-      `decision rounds exhausted (${spent.map((x) => `${x.id}:${x.rounds === null ? 'rounds_used invalid' : `${x.rounds}/2`}`).join(', ')}); ` +
-      'no further role call is made and G0 cannot pass — stop instead of starting another discussion round',
-    )
-  }
   const step = currentStep(session)
   if (step === 'done') {
     const ok = allDecisionsConfirmed(r.decisions)
     if (!ok) throw new StudioError('E_AWAITING_DECISION', 'all decisions must be confirmed (or default adopted) before conclude')
     throw new StudioError('E_NO_STEP', 'no further studio step; run "studio conclude"')
+  }
+  // 轮次耗尽（2/2）时不能再开启新的讨论轮次，避免一次拒绝把轮次写成第 3 轮。
+  // rounds_used 缺失或不是整数时同样无法证明还有额度，一并拒绝。
+  // 确认步骤不开启新一轮：第二轮被拒绝的问题回答后旧确认已作废，
+  // 必须仍能由三位专家各自重新独立确认，否则会话永远无法完成。
+  const spent = r.decisions
+    .map((d) => ({ id: d.id, rounds: roundCount(d) }))
+    .filter((x) => x.rounds === null || x.rounds >= 2)
+  if (spent.length && !isConfirmStep(step)) {
+    throw new StudioError(
+      'E_ROUNDS_EXHAUSTED',
+      `decision rounds exhausted (${spent.map((x) => `${x.id}:${x.rounds === null ? 'rounds_used invalid' : `${x.rounds}/2`}`).join(', ')}); ` +
+      'no further role call is made and G0 cannot pass — stop instead of starting another discussion round',
+    )
   }
 
   const dir = r.dir
@@ -863,9 +879,16 @@ export async function runStudioStep(repo, id, { config, adapterFactory = null, l
     writeJson(path.join(dir, 'confirmations', `${providerRole}.json`), record)
     if (verdict === 'reject') {
       reject = record
-      // 一次拒绝 = 一轮新的业务轮次。2 轮的硬上限已在上方 `E_ROUNDS_EXHAUSTED` 拦住，
-      // 所以这里最多把轮次从 1 记到 2，不会写出第 3 轮。
-      decisions = decisions.map((d) => ({ ...d, rounds_used: roundCount(d) + 1 }))
+      // 一次拒绝 = 一轮新的业务轮次，但 2 轮是硬上限：
+      //   - 讨论步骤在轮次耗尽时已被拦住，拒绝最多把 1 记到 2；
+      //   - 确认步骤在轮次耗尽后仍允许（否则回答后无法重新确认），此时拒绝只能作为
+      //     阻塞证据留下，绝不把 rounds_used 写成第 3 轮；
+      //   - rounds_used 本身无效时保持无效，由 G0 判失败，不用新值掩盖坏证据。
+      decisions = decisions.map((d) => {
+        const used = roundCount(d)
+        if (used === null) return d
+        return { ...d, rounds_used: Math.min(used + 1, 2) }
+      })
       writeJson(path.join(dir, 'decisions.json'), decisions)
       questions = [...r.questions, {
         id: nextQuestionId(r.questions),

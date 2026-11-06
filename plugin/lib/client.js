@@ -907,7 +907,8 @@ window.__ModuleLoader__.load({
         const sid = studioSel
         const nextStep = session ? (STUDIO_STEPS.find((x) => (session.steps_done || []).indexOf(x) < 0) || 'done') : null
         const concluded = session && session.status === 'concluded'
-        // 轮次用满（2/2）后 run 会被核心拒绝：界面直接禁用并说明原因，不制造"还能再跑一轮"的错觉。
+        // 轮次用满（2/2）且还会开启新一轮讨论时 run 会被核心拒绝：界面直接禁用并说明原因。
+        // 讨论已结束、只剩确认时核心会继续允许，因此这里只在 blocking_reason 为 round_limit 时禁用。
         const roundsBlocked = !!(session && (session.blocking_reason === 'round_limit' || session.blocking_reason === 'rounds_invalid'))
         const runTitle = !detail ? '先选择一个会话'
           : concluded ? '会话已结束'

@@ -62,14 +62,16 @@ expert_a → expert_b → expert_c → moderator → scribe → confirm_a → co
   `statusAfterStep` 只在全部决策都有用户动作后才把会话标成 `ready`。
 - 业务轮次：回答一次问题给该问题记 1 轮（若问题关联到某个决策，同时给该决策记 1 轮）；
   达到 2 轮后拒绝再开文本讨论轮次（`E_ROUND_LIMIT`），但允许显式采用默认。轮次不因失败/重试自增。
-  决策轮次用满 2/2 后 `run` 直接拒绝（`E_ROUNDS_EXHAUSTED`），不再调用任何角色；
-  轮次缺失或不是整数同样无法证明还有额度，一并拒绝，G0 对应 check 也失败。
-- 专家拒绝（`verdict=reject`）会写一条 `kind=expert_reject` 的阻塞问题，并给每个决策记 1 轮；
+  决策轮次用满 2/2 后，下一步若仍要开启讨论（专家/主持/书记）则 `run` 直接拒绝
+  （`E_ROUNDS_EXHAUSTED`），不再调用任何角色；确认步骤不开启新一轮，仍然可以执行。
+  轮次缺失或不是整数同样无法证明还有额度，讨论步骤一并拒绝，G0 对应 check 也失败。
+- 专家拒绝（`verdict=reject`）会写一条 `kind=expert_reject` 的阻塞问题，并给每个决策记 1 轮
+  （轮次用满后不再自增，绝不写第 3 轮）；
   同时**撤掉全部 `confirm_*` 步骤**并删除其他专家的确认文件（旧确认是对拒绝前证据的确认），
   纪要末尾追加「修订记录（第 N 轮）」写明拒绝原因；用户 `answer` 后，用户处理也追加到同一记录。
   确认提示词包含纪要、决策、以及全部问题与用户回答，所以三位专家是对**修订后的证据**重新独立确认。
-  每次拒绝前都先检查 2 轮上限，因此拒绝最多把轮次记到 2，绝不写出第 3 轮；轮次用满后停下并呈现，
-  不自动选默认。
+  每次拒绝都把轮次封顶在 2，绝不写出第 3 轮；轮次用满后若仍有阻塞问题就停在
+  `awaiting_user` 并呈现，不自动选默认；问题回答后，确认步骤仍可继续。
 
 ### G0
 
@@ -253,6 +255,32 @@ Push-Location orchestrator; try { & npm test } finally { Pop-Location }
 
 本轮执行环境同样禁用了 shell（Bash / PowerShell 均无审批可用），**未能本机重跑** `acceptance.md` 的五条命令；
 改动按逐条断言与语法约束做了静态核对，CI 会执行验收命令。
+
+## 第四轮修订（针对 review-r3 的 1 条 P1 finding）
+
+| finding | 原因 | 修正 |
+|---|---|---|
+| P1 第二轮问题解决后无法完成专家确认 | 轮次硬停写成"任一决策 `rounds_used >= 2` 就禁止一切角色调用"。第二轮拒绝后用户回答已解除阻塞，但拒绝把三位专家的确认全部作废，会话停在 `confirm_a` 却再也调不动；而 G0 又要求三位专家各自有效确认，于是会话必然无法完成 | 把上限精确限定到"讨论轮次"：新增 `isConfirmStep` / `startsDiscussionRound`，`run` 只在下一步仍会开启讨论（专家 A/B/C、主持、书记）且轮次耗尽时抛 `E_ROUNDS_EXHAUSTED`；确认步骤是对已落盘证据的独立表态，不产生新一轮，因此继续允许。`statusAfterStep` 同步只在"还有讨论步骤"时标 `awaiting_user(round_limit)`，讨论已结束、只剩确认时保持 `running` |
+
+配套收紧：既然确认步骤在轮次用满后仍可调用，拒绝就不能再把轮次加 1（否则会写出第 3 轮）。
+`studio.mjs` 的拒绝分支改为 `Math.min(rounds_used + 1, 2)`，且 `rounds_used` 本身无效时保持原值
+（不用新值掩盖坏证据，交给 G0 判失败）。于是：
+
+- 轮次用满后的拒绝仍然落盘为阻塞证据（确认文件 `verdict=reject` + 一条 `kind=expert_reject` 的阻塞问题），
+  `run` 必须先回答该问题（`E_AWAITING_USER`），永不进入第三轮讨论；
+- 问题回答后重新确认不增加业务轮次，`decisions.json` 始终保持 `[2,2]`。
+
+测试（只断言真实调用序列与落盘内容）：
+
+- 改写 `studio-cli.test.mjs` 的"两轮是硬上限"用例：第二轮问题回答后 `run` 必须能继续到 `confirm_a`
+  （修复前这里会失败）；随后让 `confirm_b` 在轮次用满后再拒绝，断言 `rounds_used` 仍为 `[2,2]`、
+  会话进入 `awaiting_user(expert_reject)`、未回答前不能再调用任何角色、`conclude` 失败。
+- 新增"第二轮拒绝回答后仍可重新确认并通过 G0"用例：走完两轮拒绝 → 逐条回答 → 三位专家各自独立
+  重新确认（调用序列 `confirm_a`/`confirm_b`/`confirm_c`，各一次）→ 状态 `ready` → `conclude` 输出
+  `G0 PASS`，且 `decisions.json` 的轮次没有被确认动作抬高。这条正是 review 指出的死锁路径。
+
+本轮同样处于禁用 shell 的执行环境（Bash / PowerShell 都无审批可用），**未能本机重跑**五条验收命令；
+改动按 `node --check` 的语法约束与逐条断言做了静态核对。
 
 ## 已知边界
 
