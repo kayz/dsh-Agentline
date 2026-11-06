@@ -654,25 +654,29 @@ function stringList(value, { allowEmpty = false } = {}) {
   return out
 }
 
+/** 与写入入口同一套：text 必须是非空字符串，levels 必须是非空字符串数组。数字、null 不能收成字符串。 */
+function acceptanceRecord(ac) {
+  if (!isObject(ac) || typeof ac.id !== 'string' || !AC_ID_RE.test(ac.id)) return null
+  if (typeof ac.text !== 'string') return null
+  const text = ac.text.trim()
+  if (!text) return null
+  const levels = stringList(ac.levels, { allowEmpty: false })
+  if (!levels) return null
+  const record = { id: ac.id, text, levels: [...levels].sort() }
+  if (typeof ac.manual === 'boolean') record.manual = ac.manual
+  return record
+}
+
 function normalizeGraph(raw) {
   if (!isObject(raw) || raw.schema !== TASKGRAPH_SCHEMA) return null
   if (!Array.isArray(raw.acceptance) || !Array.isArray(raw.tasks)) return null
   const acceptance = []
   const seenAc = new Set()
   for (const ac of raw.acceptance) {
-    if (!isObject(ac) || typeof ac.id !== 'string' || !AC_ID_RE.test(ac.id)) return null
-    if (seenAc.has(ac.id)) return null
-    seenAc.add(ac.id)
-    const text = typeof ac.text === 'string' ? ac.text.trim() : ''
-    if (!text) return null
-    const levels = stringList(ac.levels, { allowEmpty: false })
-    if (!levels) return null
-    acceptance.push({
-      id: ac.id,
-      text,
-      levels: [...levels].sort(),
-      ...(typeof ac.manual === 'boolean' ? { manual: ac.manual } : {}),
-    })
+    const record = acceptanceRecord(ac)
+    if (!record || seenAc.has(record.id)) return null
+    seenAc.add(record.id)
+    acceptance.push(record)
   }
   const tasks = []
   const seenTask = new Set()
@@ -737,7 +741,9 @@ export function renderAcceptanceMatrix(graph) {
   ]
   for (const ac of acs) {
     const owners = tasks.filter((t) => Array.isArray(t.acceptance) && t.acceptance.includes(ac.id))
-    const levels = (Array.isArray(ac.levels) ? ac.levels.map(String) : []).slice().sort()
+    // 不把 null / 数字收成 "null" / "123"。非法层级在矩阵里留空，由 G1 拒绝这条 AC。
+    const listed = stringList(ac.levels, { allowEmpty: true })
+    const levels = listed ? [...listed].sort() : []
     const taskIds = owners.map((t) => t.id).sort()
     const taskLevels = owners.map((t) => {
       const lv = (Array.isArray(t.test_levels) ? t.test_levels.map(String) : []).slice().sort()
@@ -1027,9 +1033,10 @@ function graphProblems(graph) {
   }
   const acIds = []
   for (const ac of graph.acceptance) {
-    if (!isObject(ac) || typeof ac.id !== 'string' || !AC_ID_RE.test(ac.id) || !String(ac.text || '').trim() || !Array.isArray(ac.levels) || !ac.levels.length) {
-      problems.schema.push(ac && ac.id ? ac.id : 'acceptance')
-    } else acIds.push(ac.id)
+    const record = acceptanceRecord(ac)
+    if (!record) {
+      problems.schema.push(isObject(ac) && typeof ac.id === 'string' && ac.id ? ac.id : 'acceptance')
+    } else acIds.push(record.id)
   }
   if (new Set(acIds).size !== acIds.length) problems.schema.push('duplicate-ac')
   const taskIds = []
@@ -1094,6 +1101,8 @@ function matrixProblems(graph, matrixText) {
   if (!isObject(graph) || !Array.isArray(graph.acceptance) || !Array.isArray(graph.tasks)) return ['matrix:no-graph']
   // 没有 AC 行时，空矩阵和空任务图会逐行比较通过。这不是一致的验收矩阵。
   if (graph.acceptance.length === 0) return ['matrix:empty']
+  // 矩阵行能对上，也不代表 AC 的 text / levels 类型合法。类型和生成入口同一套。
+  if (graph.acceptance.some((ac) => !acceptanceRecord(ac))) return ['matrix:acceptance-type']
   const parsed = parseMatrix(matrixText)
   const expected = matrixModel(graph)
   if (!parsed || !expected) return ['matrix:unreadable']
@@ -1418,6 +1427,12 @@ function assertMaterializableGraph(graph) {
   if (graph.tasks.length === 0 || graph.acceptance.length === 0) {
     throw new BlueprintError('E_INVALID_OUTPUT', 'task-graph.json must contain tasks and acceptance')
   }
+  for (const ac of graph.acceptance) {
+    if (!acceptanceRecord(ac)) {
+      const label = isObject(ac) && ac.id != null ? ac.id : '?'
+      throw new BlueprintError('E_INVALID_OUTPUT', `acceptance ${label} text and levels must be non-empty strings`)
+    }
+  }
   for (const task of graph.tasks) taskTitle(task)
 }
 
@@ -1434,7 +1449,14 @@ function renderBrief(task, taskId, depLines, acLines) {
     ...task.outputs.map((o) => `- ${o}`),
     '',
     '验收：',
-    ...acLines.map((a) => `- ${a.id}: ${a.text}`),
+    ...acLines.map((a) => {
+      const record = acceptanceRecord(a)
+      if (!record) {
+        const label = a && a.id != null ? a.id : '?'
+        throw new BlueprintError('E_INVALID_OUTPUT', `acceptance ${label} text and levels must be non-empty strings`)
+      }
+      return `- ${record.id}: ${record.text}`
+    }),
     '',
     `节点：${task.id}`,
     '',

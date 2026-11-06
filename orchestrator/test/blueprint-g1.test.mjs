@@ -779,4 +779,37 @@ test('blueprint g1: each check is judged from disk', async (t) => {
       })
     }
   })
+
+  await t.test('acceptance text and levels that are not strings fail schema and cannot be approved', () => {
+    const id = branch(ctx.repo, 'base', 'actype')
+    const graph = readJson(graphFile(ctx.repo, id))
+    graph.acceptance[0].text = 123
+    graph.acceptance[0].levels = [null]
+    writeJson(graphFile(ctx.repo, id), graph)
+    fs.writeFileSync(path.join(sessionDir(ctx.repo, id), 'acceptance-matrix.md'), renderAcceptanceMatrix(graph), 'utf8')
+    refresh(ctx.repo, id)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.graph_schema').pass, false)
+    assert.match(check(g, 'G1.graph_schema').evidence, /AC-001/)
+    assert.equal(check(g, 'G1.matrix_consistent').pass, false)
+    assert.match(check(g, 'G1.matrix_consistent').evidence, /matrix:acceptance-type/)
+    assert.equal(check(g, 'G1.review_pass').pass, true)
+    assert.equal(check(g, 'G1.testability_clear').pass, true)
+    assert.equal(check(g, 'G1.task_fields_complete').pass, true)
+    assert.equal(g.checks_pass, false)
+    assert.equal(g.approval_valid, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '损坏的验收也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.graph_schema|not ready/)
+    const tasksDir = path.join(ctx.repo, '.collab', 'tasks')
+    const before = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir).sort() : []
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    const after = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir).sort() : []
+    assert.deepEqual(after, before)
+    for (const name of after) {
+      const briefPath = path.join(tasksDir, name, 'brief.md')
+      if (fs.existsSync(briefPath)) assert.doesNotMatch(fs.readFileSync(briefPath, 'utf8'), /AC-001: 123/)
+    }
+  })
 })
