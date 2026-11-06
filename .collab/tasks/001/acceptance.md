@@ -72,6 +72,14 @@ node -e "const s=require('fs').readFileSync('plugin/lib/index.js','utf8');const 
 
 期望：退出码 0，输出 `OK host routes 14`。
 
+## AC-13 五个 Tab 渲染 + 默认首页（首段）
+
+```pwsh
+node -e "const fs=require('fs');const src=fs.readFileSync('plugin/lib/client.js','utf8');let factory=null;const store={};global.window={__ModuleLoader__:{load:(m)=>{factory=m.factory}},localStorage:{getItem:(k)=>(k in store?store[k]:null),setItem:(k,v)=>{store[k]=String(v)},removeItem:(k)=>{delete store[k]}},setInterval:()=>0,clearInterval:()=>{},setTimeout:()=>0,clearTimeout:()=>{}};global.fetch=()=>Promise.reject(new Error('offline'));new Function(src)();const FRAG=Symbol('frag');class Component{constructor(p){this.props=p}}const R={Fragment:FRAG,Component,createElement:(type,props,...children)=>({type,props:props||{},children}),useState:(i)=>[typeof i==='function'?i():i,()=>{}],useEffect:()=>{},useLayoutEffect:()=>{},useRef:(v)=>({current:v}),useMemo:(f)=>f(),useCallback:(f)=>f,useReducer:(r,i)=>[i,()=>{}]};const mod=factory((n)=>{if(n==='react')return R;throw new Error('unexpected require '+n)});let main=null;mod.apply({slots:{inject:(n,f)=>f(),register:(meta,C)=>{if(meta.name==='main')main=C}},configForms:null});const text=(el)=>{if(el==null||el===false||el===true)return '';if(typeof el==='string'||typeof el==='number')return String(el);if(Array.isArray(el))return el.map(text).join(' ');const t=el.type;const kids=el.children||[];if(typeof t==='function'){if(t.prototype&&t.prototype.render)return text(kids);return text(t(Object.assign({},el.props,{children:kids})))}return text(kids)};const render=(tab)=>{for(const k of Object.keys(store))delete store[k];if(tab)store['agentline.tab']=tab;return text(R.createElement(main,{}))};const tabs=['首页','Studio','Blueprint','Build','设置'];const need={home:['现在卡在哪','项目组合','待处理','运行中','最近事件','斜杠命令'],studio:['Studio 会话'],blueprint:['Blueprint 会话'],build:['暂无任务','选择一个任务查看详情'],settings:['角色路由 · 仅影响本项目','全局：哪些模型可以在哪些角色上使用','模型目录（只读）','Provider（只读）']};const bad=[];for(const tab of Object.keys(need)){const s=render(tab);for(const w of tabs.concat(need[tab]))if(!s.includes(w))bad.push(tab+': missing '+w)}if(!render(null).includes('现在卡在哪'))bad.push('default tab is not home');if(bad.length){console.log(bad.join('\n'));process.exit(1)}console.log('OK render 5 tabs')"
+```
+
+期望：退出码 0，输出 `OK render 5 tabs`。
+
 ## AC-9 五个 Tab 都能渲染（用桩 React 实际执行 client.js）
 
 把 client.js 装进桩 `window.__ModuleLoader__`，用最小 React 桩（hooks 只返回初值、effect 不执行、不发网络请求）通过 `apply()` 拿到 main slot 组件，分别以 `localStorage['agentline.tab']` = home/studio/blueprint/build/settings 渲染，并展开成纯文本检查。不存 tab 时默认渲染首页。
@@ -334,6 +342,18 @@ Write-Output 'OK no untracked files'
 
 期望：退出码 0，输出 `OK no untracked files`（没有新增的未忽略文件）。front matter 的 write_scope 必须仍仅包含上述两个文件；不能为通过检查扩大范围。
 
+## AC-14 未跟踪文件检查（第二段）
+
+```pwsh
+$untracked = @(git ls-files --others --exclude-standard)
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($untracked.Count -ne 0) { throw ('Unexpected untracked paths: ' + ($untracked -join ', ')) }
+Write-Output 'OK no untracked files'
+```
+
+期望：退出码 0，输出 `OK no untracked files`。
+
+
 ---
 
 ## 人工观察（不作为自动判定，review 时在 DSH 里抽查即可）
@@ -343,4 +363,5 @@ Write-Output 'OK no untracked files'
 3. 对话头部 AG 灯弹层里点一个任务 → 驾驶舱切到 Build Tab 并选中该任务。
 4. 在没有 `.collab/studio`、`.collab/blueprint` 的项目里，Studio/Blueprint 页显示“这个项目还没有 … 记录”，没有任何轮次、gate、示例模型名。
 5. Build 详情里 ⏸ / ⏹ / note / amend / 回答 / 确认合并 / 预授权合并 / 分档检查都还在，并且能用。
+
 
