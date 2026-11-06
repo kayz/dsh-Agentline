@@ -468,6 +468,7 @@ window.__ModuleLoader__.load({
           setProjectsReady(false)
           if (valid(s)) {
             sourceError('pipeline', '项目读取失败：' + msg)
+            if (!loaded.current.routing) sourceError('routing', '项目读取失败：' + msg)
             setPipeline({ ok: false, error: '项目读取失败：' + msg })
             loaded.current.pipeline = false
           }
