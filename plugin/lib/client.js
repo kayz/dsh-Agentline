@@ -460,17 +460,18 @@ window.__ModuleLoader__.load({
         if (!p || !p.ok) {
           const msg = failure(p)
           sourceError('projects', msg)
-          sourceError('pipeline', '项目读取失败：' + msg)
-          sourceError('routing', '项目读取失败：' + msg)
           setProjectsReady(false)
-          setPipeline({ ok: false, error: '项目读取失败：' + msg })
-          setRouting(null)
-          setDraft({})
+          if (valid(s)) {
+            sourceError('pipeline', '项目读取失败：' + msg)
+            sourceError('routing', '项目读取失败：' + msg)
+            setPipeline({ ok: false, error: '项目读取失败：' + msg })
+            setRouting(null)
+            setDraft({})
+          }
           return
         }
         sourceError('projects', '')
-        sourceError('pipeline', '')
-        sourceError('routing', '')
+        if (valid(s)) { sourceError('pipeline', ''); sourceError('routing', '') }
         const list = p.projects || []
         setProjects(list)
         setProjectsReady(true)
@@ -489,6 +490,7 @@ window.__ModuleLoader__.load({
           const exists = wanted && list.some((x) => x.path === wanted)
           const target = focus && exists ? focus : (view.current.project || (exists ? wanted : (p.default || (list[0] && list[0].path) || null)))
           if (target !== view.current.project) switchProject(target)
+          else if (target) { loadRouting(target); loadPipeline(target); loadList(target) }
           if (focusTaskId) { setPendingFocus({ project: target, task: focusTaskId }); setTab('build') }
         }
       }
