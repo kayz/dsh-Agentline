@@ -330,3 +330,39 @@ test('node edits, mapping drift, corrupt origin and legacy tasks', async (t) => 
   assert.equal(legacyCalls.length, 1)
   assert.equal(calls.length, 0)
 })
+
+test('a materialized origin rewritten as kind legacy is corrupt and does not call a model', async (t) => {
+  const base = await makeTask()
+  t.after(() => fs.rmSync(base.repo, { recursive: true, force: true }))
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-build-src-'))
+  fs.cpSync(base.repo, repo, { recursive: true })
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const taskDir = path.join(repo, '.collab', 'tasks', '001')
+  const originPath = path.join(taskDir, 'origin.json')
+  const before = stateText(taskDir)
+  fs.writeFileSync(originPath, JSON.stringify({ kind: 'legacy' }))
+  const calls = []
+  const adapter = () => ({ async run() { calls.push('no'); return { exitCode: 0, modelResolved: 'claude-des' } } })
+  const step = await runStep({
+    config: base.config, repo, taskId: '001', step: 'design', adapterFactory: adapter, log() {}, projectCfg: {},
+  })
+  assert.equal(step.ok, false)
+  assert.equal(step.reason, 'origin_corrupt')
+  assert.equal(calls.length, 0)
+  assert.equal(stateText(taskDir), before)
+  const run = await runBuild({
+    config: base.config, repo, taskId: '001', adapterFactory: adapter,
+    log() {}, projectCfg: {}, maxSteps: 2, args: { inPlace: true },
+  })
+  assert.equal(run.ok, false)
+  assert.equal(run.reason, 'origin_corrupt')
+  assert.equal(calls.length, 0)
+  fs.writeFileSync(originPath, JSON.stringify({ schema: 'agentline.origin/v1', kind: 'legacy' }))
+  const marked = await runStep({
+    config: base.config, repo, taskId: '001', step: 'design', adapterFactory: adapter, log() {}, projectCfg: {},
+  })
+  assert.equal(marked.ok, false)
+  assert.equal(marked.reason, 'origin_corrupt')
+  assert.equal(calls.length, 0)
+  assert.equal(stateText(taskDir), before)
+})

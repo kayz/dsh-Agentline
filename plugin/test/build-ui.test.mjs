@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { canonicalHash } from '../../orchestrator/lib/blueprint.mjs'
 
@@ -304,6 +305,10 @@ function writeRealTasks(root) {
     node_sha256: hash, g1_approval_id: 'A-EXP', created_at: '2026-11-07T00:00:00.000Z',
   })
   writeJson(path.join(expired, 'state.json'), { id: '006', status: 'designed', history: [] })
+
+  const disguised = path.join(root, '.collab', 'tasks', '007')
+  writeJson(path.join(disguised, 'origin.json'), { kind: 'legacy' })
+  writeJson(path.join(disguised, 'state.json'), { id: '007', status: 'designed', history: [] })
 }
 
 function makeServer(forward) {
@@ -520,6 +525,8 @@ test.describe('build ui', { concurrency: 1 }, () => {
     assert.doesNotMatch(textOfId(root, 'build-row-005'), /旧任务/)
     assert.match(textOfId(root, 'build-row-006'), /Blueprint/)
     assert.doesNotMatch(textOfId(root, 'build-row-006'), /旧任务/)
+    assert.match(textOfId(root, 'build-row-007'), /错误/)
+    assert.doesNotMatch(textOfId(root, 'build-row-007'), /旧任务/)
     assert.doesNotMatch(pageText(root), /未实现/)
 
     click(root, findById(root, 'build-item-001'))
@@ -564,6 +571,11 @@ test.describe('build ui', { concurrency: 1 }, () => {
     assert.match(textOfId(root, 'build-source'), /来源：Blueprint/)
     assert.doesNotMatch(textOfId(root, 'build-source'), /旧任务/)
     assert.match(textOfId(root, 'build-check-T.origin_valid'), /过期/)
+
+    click(root, findById(root, 'build-item-007'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
+    assert.equal(findById(root, 'build-source'), null)
 
     click(root, findById(root, 'tab-home'))
     await settle(root)
@@ -616,5 +628,67 @@ test.describe('build ui', { concurrency: 1 }, () => {
     const after = fetchCalls.filter((call) => call.url.includes('/agentline/pipeline')).length
     assert.ok(after > before)
     assert.ok(findById(root, 'build-error'))
+  })
+
+  test('a committed acceptance command change is not a passing CI gate', async (t) => {
+    const home = makeHome()
+    const project = makeProject('cmd')
+    t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(project, { recursive: true, force: true }) })
+    const git = (args, env) => execFileSync('git', args, { cwd: project, encoding: 'utf8', env: env || process.env })
+    git(['init', '-q', '-b', 'main'])
+    git(['config', 'user.email', 'test@example.com'])
+    git(['config', 'user.name', 'Test'])
+    fs.writeFileSync(path.join(project, 'README.md'), '# repo\n', 'utf8')
+    git(['add', '-A'])
+    git(['commit', '-qm', 'init'])
+    const task = path.join(project, '.collab', 'tasks', '001')
+    fs.mkdirSync(task, { recursive: true })
+    writeJson(path.join(task, 'state.json'), { id: '001', status: 'reviewable', history: [] })
+    const ranAtMs = Date.now() + 5000
+    const acceptance = (command) => ['AC-1', 'AC-2'].map((id) => [
+      `## ${id} ${id}`,
+      '',
+      '```pwsh',
+      command(id),
+      '```',
+      '',
+      `期望：${id} OK`,
+      '',
+    ].join('\n')).join('\n')
+    fs.writeFileSync(path.join(task, 'acceptance.md'), acceptance((id) => `Write-Output '${id} OK'`), 'utf8')
+    writeJson(path.join(task, 'ci-results.json'), {
+      ranAt: new Date(ranAtMs).toISOString(),
+      passed: 2,
+      total: 2,
+      ok: true,
+      results: [
+        { id: 'AC-1', passed: true, exitCode: 0, lastLine: 'AC-1 OK' },
+        { id: 'AC-2', passed: true, exitCode: 0, lastLine: 'AC-2 OK' },
+      ],
+    })
+    git(['add', '-A'])
+    git(['commit', '-qm', 'report'])
+    fs.writeFileSync(path.join(task, 'acceptance.md'), acceptance((id) => `Write-Output 'changed ${id}'`), 'utf8')
+    git(['add', '-A'])
+    git(['commit', '-qm', 'rewrite command'], {
+      ...process.env,
+      GIT_AUTHOR_DATE: new Date(ranAtMs + 10_000).toISOString(),
+      GIT_COMMITTER_DATE: new Date(ranAtMs + 10_000).toISOString(),
+    })
+    const forward = await boot(home, project)
+    installFetch(makeServer({
+      ...forward,
+      projects: projectsOf([{ title: 'cmd', path: project, enabled: true, tasks: { total: 1, active: 1, last: 'reviewable' } }], project),
+    }))
+    const root = await mountCockpit()
+    await settle(root)
+    click(root, findById(root, 'tab-build'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-row-001'), /旧任务/)
+    click(root, findById(root, 'build-item-001'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-check-T.ci_all_pass'), /过期/)
+    assert.doesNotMatch(textOfId(root, 'build-check-T.ci_all_pass'), /通过/)
+    assert.match(textOfId(root, 'build-gate'), /不通过/)
   })
 })

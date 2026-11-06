@@ -79,3 +79,22 @@ T gate 仍是 `agentline.gate/v1`。检查只有 `T.origin_valid`、`T.ci_all_pa
 ## 偏差与剩余
 
 没有改验收要求以外的字段或章节。`plugin/locale/**` 未改，Build 文案和现有驾驶舱一样写在 `client.js`。完整运行到 `pr_open` 依赖 PATH 上的 `pwsh` 和 `orchestrator/tools/ci-runner.ps1`，这是原有 CI 入口。
+
+## 来源损坏与验收命令
+
+评审指出两处会把无效证据放行，这次只补这两处。
+
+- 有 `origin.json` 时，先看 schema 和 Blueprint 来源字段，再决定能不能执行。`{"kind":"legacy"}`，以及带了 `agentline.origin/v1` 但 `kind` 仍是 `legacy` 的文件，都是 `origin_corrupt`。`runStep` 和 `runBuild` 都不调用模型，也不写 `state.json`。没有这个文件的旧任务仍走原路径。有效的 `kind: adhoc` 且写了 `reason` 的临时任务也不变。投影里这种损坏来源是错误「来源损坏」，不会显示成旧任务。
+- `T.ci_all_pass` 在条目 ID、退出码和末行都对得上之后，还要核对验收命令正文。命令来自 `acceptance.md` 里的代码块或「命令:」行，顺序和正文都要一致。文件已经进 git 时，当前命令必须等于 `ranAt` 之前最后一版已提交的命令；工作区改过但还没提交，或者后来提交了另一版命令，证据都是 `stale`，不通过。验收文件还没进 git 时，仍按条目核对，避免把现有的未提交报告误判成过期。只追加 `.collab` 里的审计文件、不改命令，产品提交时间的比较方式不变。
+
+这一轮自测：
+
+| 验收 | 结果 |
+|---|---|
+| AC-1 `node --check` 三个入口 | 退出码 0，输出 `AC-1 OK` |
+| AC-2 `node --test orchestrator/test/build-source.test.mjs` | 4 通过。物化任务的来源被写成 `{"kind":"legacy"}` 后，单步和 `runBuild` 都是 `origin_corrupt`，模型调用为 0 |
+| AC-3 `node --test orchestrator/test/build-execution.test.mjs` | 4 通过，`runBuild` 到 `pr_open` 后四项 T gate 仍通过 |
+| AC-4 `node --test orchestrator/test/build-gate.test.mjs` | 6 通过。保留 AC id、改掉命令并提交后，旧报告是 `stale` 且总 gate 不通过；只提交 `.collab` 审计的报告仍通过 |
+| AC-5 `node --test orchestrator/test/build-roles.test.mjs` | 含在下面的 orchestrator 全量里，通过 |
+| AC-6 `node --test plugin/test/build-ui.test.mjs` | 4 通过。`kind: legacy` 的损坏来源显示错误；命令改提交后 T.ci_all_pass 显示过期 |
+| AC-7 `cd orchestrator && npm test`，再 `node --test plugin/test/*.test.mjs` | orchestrator 182 通过；插件 21 通过 |

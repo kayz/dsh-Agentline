@@ -246,6 +246,44 @@ test('collab-only commits keep the reviewed code fresh, and a later product comm
   assert.equal(moved.result.pass, false)
 })
 
+test('keeping AC ids while changing the committed command does not pass the old CI report', (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const ranAtMs = Date.now() + 5000
+  writeAcceptance(taskDir, ['AC-1', 'AC-2'])
+  writeCi(taskDir, passReport(new Date(ranAtMs).toISOString()))
+  git(repo, ['add', '-A'])
+  git(repo, ['commit', '-qm', 'acceptance and report'])
+  const fresh = ciCheck(repo, taskDir)
+  assert.equal(fresh.pass, true)
+  assert.equal(fresh.evidence, 'pass')
+
+  const rewritten = ['AC-1', 'AC-2'].map((id) => [
+    `## ${id} ${id}`,
+    '',
+    '```pwsh',
+    `Write-Output 'not ${id}'`,
+    '```',
+    '',
+    `期望：${id} OK`,
+    '',
+  ].join('\n')).join('\n')
+  fs.writeFileSync(path.join(taskDir, 'acceptance.md'), rewritten, 'utf8')
+  git(repo, ['add', '-A'])
+  execFileSync('git', ['commit', '-qm', 'rewrite acceptance command'], {
+    cwd: repo,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: new Date(ranAtMs + 10_000).toISOString(),
+      GIT_COMMITTER_DATE: new Date(ranAtMs + 10_000).toISOString(),
+    },
+  })
+  const stale = ciCheck(repo, taskDir)
+  assert.equal(stale.pass, false)
+  assert.equal(stale.evidence, 'stale')
+  assert.equal(evaluateBuildGate(repo, taskDir).result.pass, false)
+})
+
 test('non-waivable CI failure cannot be waived and a consistent gate can pass', (t) => {
   const { repo, taskDir } = makeRepo()
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }))

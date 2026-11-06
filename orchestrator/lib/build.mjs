@@ -178,7 +178,8 @@ function approvalItems(doc) {
 
 /**
  * Blueprint 物化任务在每次步骤前重新核对来源。
- * 没有 origin.json 的旧任务放行；文件在但读不出来或字段不完整，不能当成旧任务。
+ * 没有 origin.json 的旧任务放行。文件在就必须先通过 schema 和来源字段；
+ * 缺字段、kind 被改成 legacy，或读不出来，都是损坏，不能当成旧任务。
  */
 export function inspectOrigin(repo, taskDir) {
   const file = path.join(taskDir, 'origin.json')
@@ -194,7 +195,6 @@ export function inspectOrigin(repo, taskDir) {
   if (origin.kind === 'adhoc' && typeof origin.reason === 'string' && origin.reason.trim()) {
     return { ok: true, legacy: true, source: 'adhoc', reason: null, detail: null }
   }
-  if (origin.kind === 'legacy') return { ok: true, legacy: true, source: 'legacy', reason: null, detail: null }
   const blueprintId = typeof origin.blueprint === 'string' ? origin.blueprint.trim() : ''
   const nodeId = typeof origin.node === 'string' ? origin.node.trim() : ''
   const approvalId = typeof origin.g1_approval_id === 'string' ? origin.g1_approval_id.trim() : ''
@@ -368,19 +368,17 @@ function callsFromDisk(taskDir) {
 
 const ACCEPTANCE_HEADING = /^#{2,4}\s+((?:AC-?\d+)|(?:[A-Z]{1,3}\d+)|(?:\d+(?:\.\d+)*))\b/
 
-function requiredAcceptanceIds(taskDir) {
-  const file = path.join(taskDir, 'acceptance.md')
-  if (!fs.existsSync(file)) return { ok: false, reason: 'missing' }
-  let text
-  try { text = fs.readFileSync(file, 'utf8') } catch { return { ok: false, reason: 'unreadable' } }
-  const ids = []
+function parseAcceptance(text) {
+  const items = []
   let current = null
   let inFence = false
   let fence = []
   const close = () => {
     if (!current) return
     if (!current.command && fence.length) current.command = fence.join('\n')
-    if (current.command && String(current.command).trim()) ids.push(current.id)
+    if (current.command && String(current.command).trim()) {
+      items.push({ id: current.id, command: String(current.command) })
+    }
     current = null
     fence = []
     inFence = false
@@ -408,8 +406,55 @@ function requiredAcceptanceIds(taskDir) {
     if (!current.command && cmd) current.command = cmd[1]
   }
   close()
-  if (!ids.length) return { ok: false, reason: 'empty' }
-  return { ok: true, ids }
+  return items
+}
+
+function requiredAcceptance(taskDir) {
+  const file = path.join(taskDir, 'acceptance.md')
+  if (!fs.existsSync(file)) return { ok: false, reason: 'missing' }
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch { return { ok: false, reason: 'unreadable' } }
+  const items = parseAcceptance(text)
+  if (!items.length) return { ok: false, reason: 'empty' }
+  return { ok: true, items }
+}
+
+function sameCommands(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+  return left.every((item, i) => item.id === right[i].id && item.command === right[i].command)
+}
+
+function acceptanceRel(repo, taskDir) {
+  return path.relative(repo, path.join(taskDir, 'acceptance.md')).split(path.sep).join('/')
+}
+
+function gitText(repo, args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 当前验收命令必须等于 ranAt 之前已提交的命令。
+ * 只改 ID 仍能对上的旧报告不算通过；未纳入 git 的验收仍只按条目核对。
+ */
+function commandsBound(repo, taskDir, ranAt, items) {
+  const rel = acceptanceRel(repo, taskDir)
+  if (gitText(repo, ['cat-file', '-e', `HEAD:${rel}`]) == null) return { ok: true }
+  const headText = gitText(repo, ['show', `HEAD:${rel}`])
+  if (headText == null) return { ok: false, evidence: 'unknown:undetermined' }
+  if (!sameCommands(parseAcceptance(headText), items)) return { ok: false, evidence: 'stale' }
+  const sha = gitText(repo, ['rev-list', '-1', `--before=${new Date(ranAt).toISOString()}`, 'HEAD', '--', rel])
+  const rev = sha && sha.trim()
+  if (!rev) return { ok: false, evidence: 'stale' }
+  const thenText = gitText(repo, ['show', `${rev}:${rel}`])
+  if (thenText == null) return { ok: false, evidence: 'unknown:undetermined' }
+  if (!sameCommands(parseAcceptance(thenText), items)) return { ok: false, evidence: 'stale' }
+  return { ok: true }
 }
 
 function classifyCiValue(taskDir, value) {
@@ -429,14 +474,14 @@ function classifyCiValue(taskDir, value) {
   if (value.passed !== passed || value.total !== results.length || value.ok !== true) {
     return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
   }
-  const required = requiredAcceptanceIds(taskDir)
+  const required = requiredAcceptance(taskDir)
   if (!required.ok) return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
   const got = results.map((row) => (isObject(row) && typeof row.id === 'string' ? row.id.trim() : ''))
-  const need = required.ids
+  const need = required.items.map((item) => item.id)
   const same = got.length === need.length && need.every((id) => got.includes(id)) && got.every((id) => need.includes(id))
   if (!same) return { status: 'unknown', pass: false, evidence: 'unknown:partial' }
   if (!results.every(commandProved)) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
-  return { status: 'pass', pass: true, evidence: 'pass' }
+  return { status: 'pass', pass: true, evidence: 'pass', commands: required.items }
 }
 
 function commandProved(row) {
@@ -468,7 +513,7 @@ function productCommitMs(repo) {
   }
 }
 
-function ciFreshness(repo, value, classified) {
+function ciFreshness(repo, taskDir, value, classified) {
   if (!classified.pass) return classified
   if (!isObject(value) || typeof value.ranAt !== 'string' || !value.ranAt.trim()) {
     return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
@@ -478,6 +523,12 @@ function ciFreshness(repo, value, classified) {
   const productMs = productCommitMs(repo)
   if (productMs == null) return { status: 'unknown', pass: false, evidence: 'unknown:undetermined' }
   if (productMs > ran + 1000) return { status: 'stale', pass: false, evidence: 'stale' }
+  const bound = commandsBound(repo, taskDir, ran, classified.commands)
+  if (!bound.ok) {
+    return bound.evidence === 'stale'
+      ? { status: 'stale', pass: false, evidence: 'stale' }
+      : { status: 'unknown', pass: false, evidence: bound.evidence || 'unknown:undetermined' }
+  }
   return classified
 }
 
@@ -498,7 +549,7 @@ function classifyCi(repo, taskDir) {
   const report = readCiReport(taskDir)
   if (report.state === 'missing') return { status: 'unknown', pass: false, evidence: 'unknown:missing' }
   if (report.state === 'corrupt') return { status: 'unknown', pass: false, evidence: 'unknown:corrupt' }
-  return ciFreshness(repo, report.value, classifyCiValue(taskDir, report.value))
+  return ciFreshness(repo, taskDir, report.value, classifyCiValue(taskDir, report.value))
 }
 
 function gitAncestor(repo, sha) {
