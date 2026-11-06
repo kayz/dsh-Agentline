@@ -943,6 +943,73 @@ export function apply(ctx, config) {
         } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }, 500) }
       })
 
+      // Blueprint 控制面。读取走 lib/blueprint.mjs；写操作每次只转发一条公开 CLI。
+      route('/agentline/blueprint', 'agentline: blueprint', async (req, res) => {
+        try {
+          const u = new URL(req.url || '/', 'http://localhost')
+          const bp = await importFresh(path.join(agentlineHome(), 'lib', 'blueprint.mjs'))
+
+          if (req.method === 'POST') {
+            const body = await readBody(req)
+            const action = String((body && body.action) || '')
+            const id = String((body && body.id) || '')
+            const project = projectDirOrNull((body && body.project) || u.searchParams.get('project'))
+            if (!project) return sendJson(res, { ok: false, error: 'project not found' }, 400)
+            if (!['new', 'run', 'review', 'approve', 'materialize'].includes(action)) return sendJson(res, { ok: false, error: 'unknown blueprint action' }, 400)
+            if (!bp.isValidSessionId(id)) return sendJson(res, { ok: false, error: 'invalid blueprint session id' }, 400)
+
+            const argv = [agentlineCli(), 'blueprint', action, '--repo', project, '--id', id]
+            if (action === 'new') {
+              const title = String((body && body.title) || '').trim()
+              const input = String((body && body.input) || '').trim()
+              const fromStudio = String((body && body.fromStudio) || '').trim()
+              if (!input) return sendJson(res, { ok: false, error: 'new requires input' }, 400)
+              if (title) argv.push('--title', title)
+              argv.push('--input', input)
+              if (fromStudio) argv.push('--from-studio', fromStudio)
+            }
+            if (action === 'approve') {
+              const text = String((body && body.text) || '').trim()
+              if (!text) return sendJson(res, { ok: false, error: 'approve requires text' }, 400)
+              argv.push('--text', text, '--channel', 'ui')
+            }
+            if (action === 'materialize' && body && body.dryRun === true) argv.push('--dry-run')
+
+            const child = spawn(nodeBin(), argv, { cwd: agentlineHome(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+            let out = ''
+            child.stdout.on('data', (d) => { out += d.toString() })
+            child.stderr.on('data', (d) => { out += d.toString() })
+            const code = await new Promise((resolve) => {
+              const timer = setTimeout(() => { try { child.kill() } catch { /* ignore */ } resolve(124) }, 600_000)
+              child.on('close', (c) => { clearTimeout(timer); resolve(c ?? -1) })
+            })
+            logPlugin(`blueprint ${action} ${project}#${id} -> code=${code}`)
+            return sendJson(res, { ok: code === 0, code, output: out.slice(-4000) })
+          }
+
+          if (req.method && req.method !== 'GET') return sendJson(res, { ok: false, error: 'GET or POST only' }, 405)
+          const queryProject = projectDirOrNull(u.searchParams.get('project'))
+          if (!queryProject) return sendJson(res, { ok: false, error: 'project not found' }, 400)
+          const id = u.searchParams.get('id')
+          if (id && !bp.isValidSessionId(id)) return sendJson(res, { ok: false, error: 'invalid blueprint session id' }, 400)
+          if (!id) {
+            return sendJson(res, { ok: true, project: queryProject, sessions: bp.listSessions(queryProject) })
+          }
+          const detail = bp.readBlueprint(queryProject, id)
+          if (detail.state !== 'ok') {
+            return sendJson(res, {
+              ok: false, state: detail.state, project: queryProject, id,
+              error: (detail.errors || []).join('; ') || `blueprint session ${id} is ${detail.state}`,
+            })
+          }
+          const g1 = bp.evaluateG1(queryProject, id)
+          const next = bp.decide(detail.session, g1)
+          const last = (detail.reviews || [])[(detail.reviews || []).length - 1]
+          const findings = last && last.value && Array.isArray(last.value.findings) ? last.value.findings : []
+          sendJson(res, { ok: true, project: queryProject, id, ...detail, g1, next, findings })
+        } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }, 500) }
+      })
+
       // 只读：模型目录与 Provider 发现缓存（转发 orchestrator 的 config + model-catalog，不写盘）
       route('/agentline/catalog', 'agentline: catalog', async (req, res) => {
         try {

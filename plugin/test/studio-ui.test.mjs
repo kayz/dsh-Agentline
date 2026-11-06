@@ -510,7 +510,8 @@ test('studio ui: five tabs, Inbox, portfolio, legacy task controls and unimpleme
 
   click(root, findById(root, 'tab-blueprint'))
   await settle(root)
-  assert.match(textOf(root.tree), /未实现/)
+  assert.ok(findById(root, 'blueprint-empty'), 'blueprint page is wired and shows an empty state')
+  assert.match(textOf(root.tree), /还没有 Blueprint 会话/)
 })
 
 test('studio ui: empty, real, error and project-switch states are distinct', async (t) => {

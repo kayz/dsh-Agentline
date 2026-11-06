@@ -112,7 +112,7 @@ window.__ModuleLoader__.load({
       { cmd: '/agentline <目标>', desc: '在当前工作区新建任务并启动 flow（design → dev → CI → review）', ok: true },
       { cmd: '/agentline --project <路径> <目标>', desc: '指定工作区派活', ok: true },
       { cmd: '/agentline studio new|run|answer|conclude', desc: 'Studio 会话：新建、单步运行、回答、评估 G0', ok: true },
-      { cmd: '/agentline blueprint …', desc: 'Blueprint 设计与 G1', ok: false },
+      { cmd: '/agentline blueprint new|run|review|approve|materialize|status', desc: 'Blueprint 设计、G1 与物化', ok: true },
       { cmd: '/agentline approve …', desc: 'gate 批准（需原话）', ok: false },
     ]
     const STAGE_TEXT = { not_started: '未开始', idle: '空闲' }
@@ -152,6 +152,10 @@ window.__ModuleLoader__.load({
     const STUDIO_STATUS_TEXT = {
       running: '进行中', awaiting_user: '待你处理', ready: '可评估 G0', concluded: '已结束',
       missing: '不存在', empty: '空', corrupt: '损坏', failed: '失败',
+    }
+    const BLUEPRINT_STATUS = {
+      running: '进行中', awaiting_user: '待你处理', passed: '已批准', materialized: '已物化',
+      blocked: '阻塞', missing: '不存在', empty: '空', corrupt: '损坏',
     }
     const show = (v) => (v === undefined || v === null || v === '' || v === 'unknown' ? '未知' : String(v))
     // 与会话核心同一判定：只有带有效用户动作的 answered/default_adopted 才算真的关闭。
@@ -378,6 +382,14 @@ window.__ModuleLoader__.load({
       const [studioMsg, setStudioMsg] = React.useState('')
       const [studioNew, setStudioNew] = React.useState({ id: '', title: '', input: '' })
       const [studioAnswers, setStudioAnswers] = React.useState({})
+      const [blueprintList, setBlueprintList] = React.useState(null)
+      const [blueprintSel, setBlueprintSel] = React.useState(null)
+      const [blueprintDetail, setBlueprintDetail] = React.useState(null)
+      const [blueprintDetailError, setBlueprintDetailError] = React.useState('')
+      const [blueprintBusy, setBlueprintBusy] = React.useState(false)
+      const [blueprintMsg, setBlueprintMsg] = React.useState('')
+      const [blueprintNew, setBlueprintNew] = React.useState({ id: '', title: '', input: '' })
+      const [blueprintApprove, setBlueprintApprove] = React.useState('')
       const [catalogQuery, setCatalogQuery] = React.useState('')
       const [channelFilter, setChannelFilter] = React.useState('all')
       const [collapsedChannels, setCollapsedChannels] = React.useState({})
@@ -412,6 +424,7 @@ window.__ModuleLoader__.load({
         view.current.epoch++
         view.current.project = p
         view.current.studio = null
+        view.current.blueprint = null
         clearTask()
         view.current.task = null
         setProject(p); setCurrent(null); setTasks([]); setTokens(null); setListReady(false)
@@ -420,6 +433,8 @@ window.__ModuleLoader__.load({
         setStudioList(null); setStudioSel(null); setStudioDetail(null); setStudioDetailError('')
         setStudioRoles({})
         setStudioMsg(''); setStudioBusy(false); setStudioNew({ id: '', title: '', input: '' }); setStudioAnswers({})
+        setBlueprintList(null); setBlueprintSel(null); setBlueprintDetail(null); setBlueprintDetailError('')
+        setBlueprintMsg(''); setBlueprintBusy(false); setBlueprintNew({ id: '', title: '', input: '' }); setBlueprintApprove('')
         setSourceErrors((e) => ({ ...e, routing: '' }))
         loaded.current.routing = false
         loaded.current.pipeline = false
@@ -690,6 +705,69 @@ window.__ModuleLoader__.load({
         setStudioDetail(r)
       }
 
+      const loadBlueprint = async (proj, id) => {
+        if (!proj || proj !== view.current.project) return
+        const key = id ? 'blueprint-detail' : 'blueprint'
+        const s = scope(), n = begin(key)
+        const q = '/agentline/blueprint?project=' + encodeURIComponent(proj) + (id ? '&id=' + encodeURIComponent(id) : '')
+        const r = await j(q)
+        if (!latest(key, n, s)) return
+        if (!id) {
+          setBlueprintList(r && r.ok
+            ? { ok: true, sessions: r.sessions || [] }
+            : { ok: false, error: failure(r) })
+          return
+        }
+        if (!r || !r.ok) {
+          setBlueprintDetail(null)
+          const reason = (r && r.error) ? r.error : failure(r)
+          setBlueprintDetailError('无法读取会话：' + reason)
+          return
+        }
+        setBlueprintDetailError('')
+        setBlueprintDetail(r)
+      }
+      const selectBlueprint = (id) => {
+        if (id === view.current.blueprint) return
+        view.current.blueprint = id
+        setBlueprintSel(id); setBlueprintDetail(null); setBlueprintDetailError(''); setBlueprintMsg('')
+      }
+      const blueprintAction = async (action, extra) => {
+        if (!project || project !== view.current.project || blueprintBusy) return
+        const s = scope()
+        setBlueprintBusy(true)
+        setBlueprintMsg('')
+        const res = await fetch('/agentline/blueprint', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ project, action, ...(extra || {}) }),
+        }).then((r) => r.json()).catch(() => null)
+        if (!valid(s)) return
+        if (!res) {
+          setBlueprintMsg('操作失败：请求发不出去')
+          setBlueprintBusy(false)
+          return
+        }
+        if (!res.ok) {
+          const tail = String(res.output || '').split('\n').filter(Boolean).slice(-2).join(' ')
+          setBlueprintMsg('操作失败：' + (res.error || tail || ('exit ' + res.code)))
+          setBlueprintBusy(false)
+          return
+        }
+        const done = { approve: '已批准', materialize: '已物化', new: '会话已创建' }
+        setBlueprintMsg(done[action] || '已提交')
+        const nextId = action === 'new' && extra && extra.id ? extra.id : blueprintSel
+        if (action === 'new') {
+          view.current.blueprint = nextId
+          setBlueprintSel(nextId)
+          setBlueprintNew({ id: '', title: '', input: '' })
+        }
+        if (action === 'approve') setBlueprintApprove('')
+        setBlueprintBusy(false)
+        loadBlueprint(project, null)
+        if (nextId) loadBlueprint(project, nextId)
+      }
+
       const selectStudio = (id) => {
         if (id === view.current.studio) return
         view.current.studio = id
@@ -799,6 +877,13 @@ window.__ModuleLoader__.load({
         const it = window.setInterval(() => loadStudio(project, studioSel), 5000)
         return () => { begin('studio'); window.clearInterval(it) }
       }, [project, studioSel])
+
+      React.useEffect(() => {
+        if (!project) return
+        loadBlueprint(project, blueprintSel)
+        const it = window.setInterval(() => loadBlueprint(project, blueprintSel), 5000)
+        return () => { begin('blueprint'); begin('blueprint-detail'); window.clearInterval(it) }
+      }, [project, blueprintSel])
 
       React.useEffect(() => {
         if (pendingFocus && pendingFocus.task && (!pendingFocus.project || pendingFocus.project === project) && tasks.some((t) => t.id === pendingFocus.task)) {
@@ -1063,7 +1148,147 @@ window.__ModuleLoader__.load({
         )
       }
 
-      const renderBlueprint = () => renderStage('blueprint', 'Blueprint')
+      const renderBlueprint = () => {
+        const list = blueprintList
+        const sessions = list && list.ok ? list.sessions : []
+        const detail = blueprintDetail
+        const session = detail ? detail.session : null
+        const g1 = detail ? detail.g1 : null
+        const busy = blueprintBusy || !project
+        const sid = blueprintSel
+        const phaseText = { design: '设计', testability: '测试架构', review: '评审' }
+        const next = detail && detail.next
+        const canRun = !!(next && next.kind === 'step')
+        const canReview = !!(next && next.role === 'reviewer')
+        const checksPass = !!(g1 && g1.checks_pass)
+        const roundLabel = session && session.round ? ('第 ' + session.round.current + '/' + session.round.max + ' 轮 · ' + (phaseText[session.phase] || session.phase)) : '—'
+        const findings = detail && Array.isArray(detail.findings) ? detail.findings : []
+        const tasks = detail && detail.taskGraph && Array.isArray(detail.taskGraph.tasks) ? detail.taskGraph.tasks : []
+        const approvalText = !g1 ? '未评估' : g1.approval_valid ? '批准有效' : (g1.approval_id ? '批准已失效' : '未批准')
+        const materialized = detail && detail.materialized && Array.isArray(detail.materialized.tasks) ? detail.materialized.tasks : []
+        const detailNode = blueprintDetailError
+          ? h('div', { className: 'agl-box', 'data-testid': 'blueprint-detail-error' },
+            fine(blueprintDetailError),
+            h('button', { className: 'agl-btn', 'data-testid': 'blueprint-retry', onClick: () => loadBlueprint(project, blueprintSel) }, '重试'))
+          : !detail
+            ? h('div', { className: 'agl-empty' }, blueprintSel ? '读取中…' : '选择一个 Blueprint 会话查看轮次、评审、任务图与 G1')
+            : h('div', null,
+              box('会话 · ' + sid,
+                h('div', { className: 'agl-route' },
+                  h('b', { 'data-testid': 'blueprint-session-status' }, BLUEPRINT_STATUS[session.status] || show(session.status)),
+                  h('span', { className: 'agl-fine', 'data-testid': 'blueprint-round' }, roundLabel),
+                  h('span', { className: 'agl-fine' }, '修改于 ' + when(session.updated_at))),
+                fine(session.title || sid),
+                h('div', { className: 'agl-route', style: { marginTop: '8px' } },
+                  h('button', {
+                    className: 'agl-btn', 'data-testid': 'blueprint-run', disabled: busy || !canRun,
+                    title: canRun ? '运行下一步（每次只执行一个角色步骤）' : '当前不能再前进一步',
+                    onClick: () => blueprintAction('run', { id: sid }),
+                  }, blueprintBusy ? '执行中…' : '运行下一步'),
+                  h('button', {
+                    className: 'agl-btn', 'data-testid': 'blueprint-review', disabled: busy || !canReview,
+                    title: canReview ? '执行评审' : '评审不能跳过设计和测试架构',
+                    onClick: () => blueprintAction('review', { id: sid }),
+                  }, '评审'),
+                  blueprintMsg ? h('span', { className: 'agl-fine', 'data-testid': 'blueprint-msg' }, blueprintMsg) : null),
+                session.awaiting && session.awaiting.kind ? fine('等待：' + session.awaiting.kind) : null),
+              box('角色', h('table', { className: 'agl-t' },
+                h('thead', null, h('tr', null, ['角色', '模型', '档位', '厂商', '身份'].map((x) => h('th', { key: x }, x)))),
+                h('tbody', null, ['designer', 'reviewer', 'test_architect'].map((role) => {
+                  const row = (session.roles || {})[role] || {}
+                  return h('tr', { key: role, 'data-testid': 'blueprint-role-' + role },
+                    h('td', null, role), h('td', { className: 'mono' }, show(row.model)), h('td', null, show(row.tier)),
+                    h('td', null, show(row.vendor)), h('td', null, show(row.identity)))
+                })))),
+              box('评审发现 (' + findings.length + ')',
+                findings.length === 0 ? fine('还没有评审发现') :
+                  h('table', { className: 'agl-t', 'data-testid': 'blueprint-findings' },
+                    h('thead', null, h('tr', null, ['ID', '严重度', '状态', '内容'].map((x) => h('th', { key: x }, x)))),
+                    h('tbody', null, findings.map((f) => h('tr', { key: f.id, 'data-testid': 'finding-' + f.id },
+                      h('td', { className: 'mono' }, show(f.id)), h('td', null, show(f.severity)),
+                      h('td', null, show(f.status)), h('td', { className: 'agl-fine' }, show(f.text))))))),
+              box('任务图 (' + tasks.length + ')',
+                tasks.length === 0 ? fine('还没有任务图') :
+                  h('table', { className: 'agl-t', 'data-testid': 'blueprint-tasks' },
+                    h('thead', null, h('tr', null, ['ID', '标题', '依赖', 'write_scope', 'AC', '测试层级'].map((x) => h('th', { key: x }, x)))),
+                    h('tbody', null, tasks.map((t) => h('tr', { key: t.id, 'data-testid': 'task-' + t.id },
+                      h('td', { className: 'mono' }, t.id), h('td', null, show(t.title)),
+                      h('td', { className: 'agl-fine' }, (t.depends_on || []).join(', ') || '—'),
+                      h('td', { className: 'agl-fine' }, (t.write_scope || []).join(', ')),
+                      h('td', { className: 'agl-fine' }, (t.acceptance || []).join(', ')),
+                      h('td', null, (t.test_levels || []).join(', '))))))),
+              box('G1 · ' + (g1 ? (g1.pass ? 'PASS' : g1.status) : '未评估'),
+                g1 && g1.checks && g1.checks.length
+                  ? h('table', { className: 'agl-t', 'data-testid': 'blueprint-g1' },
+                    h('thead', null, h('tr', null, ['检查', '结果', '说明'].map((x) => h('th', { key: x }, x)))),
+                    h('tbody', null, g1.checks.map((c) => h('tr', { key: c.id, 'data-testid': 'g1-' + c.id },
+                      h('td', { className: 'mono' }, c.id),
+                      h('td', { style: { color: c.pass ? '#3fb950' : '#f85149' } }, c.pass ? '✓' : '✗'),
+                      h('td', { className: 'agl-fine' }, c.desc)))))
+                  : fine(g1 ? '无法评估：' + show((g1.errors || []).join('; ')) : '尚未求值')),
+              box('批准与物化',
+                h('div', { 'data-testid': 'blueprint-approval' }, approvalText + (g1 && g1.content_hash ? ' · ' + g1.content_hash.slice(0, 19) : '')),
+                materialized.length
+                  ? h('div', { 'data-testid': 'blueprint-materialized' }, '已生成 ' + materialized.map((m) => m.node + '→' + m.task).join(', '))
+                  : fine('尚未物化'),
+                h('div', { className: 'agl-ctl', style: { marginTop: '8px' } },
+                  h('input', {
+                    className: 'agl-input', 'data-testid': 'blueprint-approve-text', placeholder: '批准原话…',
+                    value: blueprintApprove, onChange: (e) => setBlueprintApprove(e.target.value),
+                  }),
+                  h('button', {
+                    className: 'agl-btn', 'data-testid': 'blueprint-approve',
+                    disabled: busy || !checksPass || !blueprintApprove.trim(),
+                    onClick: () => blueprintAction('approve', { id: sid, text: blueprintApprove.trim() }),
+                  }, '批准'),
+                  h('button', {
+                    className: 'agl-btn', 'data-testid': 'blueprint-materialize',
+                    disabled: busy || !(g1 && g1.pass),
+                    title: g1 && g1.pass ? '生成 Build 任务' : '需要 G1 通过且批准仍然有效',
+                    onClick: () => blueprintAction('materialize', { id: sid }),
+                  }, '物化'))))
+        return h('div', { className: 'agl-grid2' },
+          h('div', null,
+            box('Blueprint 会话' + (list && list.ok ? ' (' + sessions.length + ')' : ''),
+              list === null ? fine('读取中…') :
+                !list.ok ? h('div', { 'data-testid': 'blueprint-error' },
+                  fine('无法读取 Blueprint 会话：' + list.error),
+                  h('button', { className: 'agl-btn', 'data-testid': 'blueprint-retry-list', onClick: () => loadBlueprint(project, null) }, '重试'))
+                  : sessions.length === 0 ? h('div', { 'data-testid': 'blueprint-empty' }, fine('这个项目还没有 Blueprint 会话；用下面的「新建会话」开始。'))
+                    : sessions.map((s) => h('div', {
+                      key: s.id, className: 'agl-item' + (blueprintSel === s.id ? ' on' : ''),
+                      'data-testid': 'blueprint-session-' + s.id, onClick: () => selectBlueprint(s.id),
+                    },
+                      h('div', { className: 'r1' }, h('span', { className: 'id' }, s.id), h('span', { className: 'agl-fine' }, BLUEPRINT_STATUS[s.status] || show(s.status))),
+                      h('div', { className: 'meta' }, (s.title || s.id) + ' · ' + show(s.phase) + ' · 第 ' + show(s.round) + ' 轮'))),
+            ),
+            box('新建会话',
+              h('div', { className: 'agl-route' },
+                h('input', {
+                  className: 'agl-input', 'data-testid': 'blueprint-new-id', placeholder: '会话 id（安全路径段）',
+                  value: blueprintNew.id, onChange: (e) => setBlueprintNew((v) => ({ ...v, id: e.target.value })),
+                }),
+                h('input', {
+                  className: 'agl-input', 'data-testid': 'blueprint-new-title', placeholder: '标题（可选）',
+                  value: blueprintNew.title, onChange: (e) => setBlueprintNew((v) => ({ ...v, title: e.target.value })),
+                })),
+              h('div', { className: 'agl-route', style: { marginTop: '6px' } },
+                h('input', {
+                  className: 'agl-input', style: { flex: 1, minWidth: '160px' }, 'data-testid': 'blueprint-new-input',
+                  placeholder: '用户输入…', value: blueprintNew.input,
+                  onChange: (e) => setBlueprintNew((v) => ({ ...v, input: e.target.value })),
+                })),
+              h('div', { className: 'agl-route', style: { marginTop: '6px' } },
+                h('button', {
+                  className: 'agl-btn', 'data-testid': 'blueprint-new-submit',
+                  disabled: busy || !blueprintNew.id.trim() || !blueprintNew.input.trim(),
+                  onClick: () => blueprintAction('new', { id: blueprintNew.id.trim(), title: blueprintNew.title.trim(), input: blueprintNew.input }),
+                }, blueprintBusy ? '创建中…' : '新建会话'),
+                fine('会话写入 .collab/blueprint/<id>/；每次 run 只前进一步'))),
+          ),
+          h('div', null, detailNode),
+        )
+      }
 
       const renderCatalog = () => {
         const status = catalog === null ? '读取中…' : !catalog.ok ? '无法读取模型目录：' + catalog.error : null
@@ -1147,7 +1372,7 @@ window.__ModuleLoader__.load({
               h('td', null, show(r.tier)),
               h('td', { className: 'agl-fine' }, show(r.constraint)),
               h('td', { className: 'agl-fine' }, r.probe ? r.probe : '未知'))))),
-          fine('Studio 取 studio.roles 配置；Blueprint 未实现，配置与操作只读；Build 映射现有 design/dev/review，编辑在上一节「角色路由」。'),
+          fine('Studio 取 studio.roles 配置；Blueprint 角色在 Blueprint 页按会话展示，矩阵保持只读；Build 映射现有 design/dev/review，编辑在上一节「角色路由」。'),
         )
       }
 
