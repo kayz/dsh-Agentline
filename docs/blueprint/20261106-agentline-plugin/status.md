@@ -1,65 +1,56 @@
 # Blueprint 20261106 — AgentLine 插件状态
 
-状态：**契约收口 v4 完成；Review v4 = REVISE；无新的用户裁决，仍有局部契约待修补**
+状态：**契约修补 v5 完成；Review v5 = REVISE；无新的用户裁决**
 日期：2026-11-06
 
 ## 已完成
 
 - `brief.md`：完整 Blueprint 需求。
-- `design-v1.md`：主设计 v1（105k）。
-- `design-v2-delta.md` / `review-v2.md`：第 2 轮。
-- `design-v3-delta.md` / `review-v3.md`：第 3 轮。
-- `design-v4-contract.md` / `review-v4.md`：用户 D1–D4 后的契约收口。
+- `design-v1.md` / `review-v1.md`：v1。
+- `design-v2-delta.md` / `review-v2.md`：v2。
+- `design-v3-delta.md` / `review-v3.md`：v3。
+- `design-v4-contract.md` / `review-v4.md`：D1–D4 后的契约收口。
+- `design-v5-contract.md` / `review-v5.md`：输入账本、K 恢复、T 缓存、旧 CLI drain、D3 修补。
+- `mockups/index.html`：含多项目/多任务的静态 UI mockup。
 - `docs/studio/20261106-agentline-plugin/decisions.md`：D1=A、D2=人工登记、D3=显式追加、D4=本机 CLI 信任。
 
-## Review v4 结论
+## Review v5 结论
 
 已关闭：
 
-- B5 批准竞态；
-- M3/M5 原问题；
-- B4 正常合并校验循环；
-- D1 K1 授权边界、D2 人工例外、D4 本机信任落地。
+- **B4**：K 恢复（recording 阶段、预计算 blob、R-TXN）；
+- **B4 缓存**：T-PURE + 动态 `T.local_evidence`；
+- **D3**：Build 的 `L_e`、Blueprint 的 `L_bp`、调度和 G1/T gate 贯通；
+- M3/M5、B5、B2/G2、M2 保持关闭。
 
 仍剩：
 
-### B1 部分关闭
+### B1-1 输入账本
 
-1. `rebindInputs` 依赖 `HEAD:inputs.jsonl`，但 `inputs.jsonl` 按 Q6 外置/gitignore；消费后、提交前崩溃无法恢复。
-2. `call.archive` 已落盘、`call.end` 未落盘的窗口没有恢复分支。
-3. Windows 进程终止证明仍可能漏掉存活的后代进程。
+- 系统 note 的正常路径没有在 beforeCall 前完成 `input.intent` 与实际输入 id 的绑定，会触发 `G_INPUT_UNRECONCILED`；
+- 旧 CLI 在 `markConsumed` 整读与 rename 之间追加输入，可能丢失原文；旧 CLI 不写 `input.append`，不能靠下一次对账自愈。
 
-### B4 部分关闭
+### B1-2 晚到归档
 
-1. K 已提交、`phase=recorded` 之前崩溃，会被误判为分歧；K 写入/暂存未提交窗口也未定义。
-2. `T_content` 缓存键没有覆盖 `check-task -Sealed` 的本机日志检查；修改本机日志后缓存仍可能命中。
+- `call.archive_late` 复用原 `calls/<call_id>/` 目录，但原归档不可变；
+- “late 已写、end 未写时再次崩溃”没有唯一恢复结果。
 
-### M4 部分关闭
+### B1-3 POSIX 终止证明
 
-旧 `executeRole` 在 adapter 调用结束到下一候选之间会短暂 `clearLive`；drain 可能误报零运行。旧 CLI 没有 admission/任务锁。
+- 受守护的 Windows Job 路径已解决漏后代；
+- 无守护 POSIX 回退遇到外部旧 subreaper 接管时，无法仅凭 `(pid,ppid,create_time)` 排除；
+- 必须返回 `unknown`，不能放行。
 
-### D3 部分落地
+### M4 旧 CLI drain
 
-- 调度规则仍要求 `k < 3`；
-- G1 的不可豁免检查仍是 `rounds_le_3`；
-- 追加的第 4 轮无法通过调度和 G1。
-
-## 无新的用户裁决
-
-D1–D4 不需要重裁。剩余是现有授权内的局部契约修补；不需要重开架构，不需要新增产品功能。
+- 旧 `cmdRun` 没有 admission/任务锁/job 登记；
+- 入口进程被杀后，模型子进程仍存活时，来源 (f) 找不到旧入口，drain 可能误报 0；
+- 需要入口退出后仍保持非零或 `unknown`，直到后代终止被证明。
 
 ## 是否可进入实现切分
 
-**no。**
-
-前置条件：
-
-1. 关闭 B1 输入恢复、archive/end 窗口、进程终止证明；
-2. 关闭 B4 K 恢复窗口与 T 缓存边界；
-3. 修正旧 CLI drain 生命周期；
-4. 同步 D3 到调度和 G1；
-5. 拼装最终设计合并稿。
+**no。** B1 三组和 M4 仍需局部契约修补；不需要重开架构、不需要新用户裁决。
 
 ## 当前建议
 
-继续一次**局部契约修补**（不重开 Blueprint 范式，不新增用户决策），只修上述四项，再复核。现有 UI/UX、slash 命令、监控、模型配置、控制面架构可以保留。
+继续一次只修 B1-1/B1-2/B1-3/M4 的局部修补，然后再复核并拼装最终合并稿。UI mockup 已包含多项目、多任务，可供同时评审。

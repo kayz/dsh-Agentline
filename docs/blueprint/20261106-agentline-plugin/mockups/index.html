@@ -122,7 +122,8 @@
   <header class="topbar">
     <div class="brand">◈ Agent<b>Line</b></div>
     <select class="project" aria-label="项目">
-      <option>dsh-Agentline</option>
+      <option>全部项目（2）</option>
+      <option selected>dsh-Agentline</option>
       <option>Shimeji</option>
     </select>
     <div class="stages" role="tablist" aria-label="阶段">
@@ -170,6 +171,36 @@
         </div>
       </div>
 
+      <div class="panel" style="margin-bottom:14px">
+        <div class="row between" style="margin-bottom:8px">
+          <h3 style="margin:0">项目组合 <span class="muted">(2)</span></h3>
+          <span class="small muted">按项目查看 Studio / Blueprint / Build；跨项目待办统一汇总</span>
+        </div>
+        <table class="table">
+          <thead><tr><th>项目</th><th>Studio</th><th>Blueprint</th><th>Build</th><th>待处理</th><th>运行中</th><th>下一动作</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>dsh-Agentline</b> <span class="tag blue">当前</span></td>
+              <td><span class="tag green">✓ G0</span></td>
+              <td><span class="tag blue">2/3 评审</span></td>
+              <td><span class="tag yellow">4/9 merged</span></td>
+              <td><span class="tag red">3</span></td>
+              <td>2</td>
+              <td><button class="btn small" data-page="blueprint">打开 Blueprint</button></td>
+            </tr>
+            <tr>
+              <td><b>Shimeji</b></td>
+              <td><span class="tag green">✓ 已拍板</span></td>
+              <td><span class="tag green">✓ 已批准</span></td>
+              <td><span class="tag blue">2/9 进行中</span></td>
+              <td>0</td>
+              <td>1</td>
+              <td><button class="btn small" data-page="build">打开 Build</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <div class="cols-2">
         <div>
           <div class="row between" style="margin-bottom:8px"><h3 style="margin:0">待我处理 <span class="muted">(3)</span></h3><button class="btn">全部收起</button></div>
@@ -196,10 +227,11 @@
           </div>
 
           <div class="panel" style="margin-top:14px">
-            <div class="row between"><h3>运行中 <span class="muted">(2)</span></h3><span class="small muted">自动刷新 · 5s</span></div>
+            <div class="row between"><h3>运行中 · 全部项目 <span class="muted">(3)</span></h3><span class="small muted">自动刷新 · 5s</span></div>
             <div class="list">
-              <div class="list-row"><div><b>Build 004</b> <span class="muted">dev r1</span></div><div class="mono">gpt-6.1-sol</div><div><span class="tag blue">running</span></div><div class="small muted">12m</div></div>
-              <div class="list-row"><div><b>Blueprint r2</b> <span class="muted">review</span></div><div class="mono">gpt-6.1-sol</div><div><span class="tag yellow">unverified</span></div><div class="small muted">6m</div></div>
+              <div class="list-row"><div><b>AgentLine · Build 004</b> <span class="muted">dev r1</span></div><div class="mono">gpt-6.1-sol</div><div><span class="tag blue">running</span></div><div class="small muted">12m</div></div>
+              <div class="list-row"><div><b>AgentLine · Blueprint r2</b> <span class="muted">review</span></div><div class="mono">gpt-6.1-sol</div><div><span class="tag yellow">unverified</span></div><div class="small muted">6m</div></div>
+              <div class="list-row"><div><b>Shimeji · Build 012</b> <span class="muted">review</span></div><div class="mono">claude-opus-5-5</div><div><span class="tag blue">running</span></div><div class="small muted">3m</div></div>
             </div>
           </div>
         </div>
@@ -436,16 +468,18 @@ T_content / T_pre / T_final...</pre>
       </div>
       <div class="panel">
         <div class="row between" style="margin-bottom:8px">
-          <div class="actions"><select class="project"><option>里程碑：M1</option><option>M2</option></select><select class="project"><option>来源：全部</option><option>Blueprint</option><option>独立</option></select><select class="project"><option>状态：全部</option></select></div>
-          <span class="small muted">筛选 · 3 个任务等待中</span>
+          <div class="actions"><select class="project"><option>项目：全部项目（2）</option><option>dsh-Agentline</option><option>Shimeji</option></select><select class="project"><option>里程碑：M1</option><option>M2</option></select><select class="project"><option>来源：全部</option><option>Blueprint</option><option>独立</option></select><select class="project"><option>状态：全部</option></select></div>
+          <span class="small muted">跨项目筛选 · 3 个任务等待中</span>
         </div>
         <table class="table">
-          <thead><tr><th>任务</th><th>来源</th><th>测试层级</th><th>T gate</th><th>状态</th><th>模型</th><th>耗时</th></tr></thead>
+          <thead><tr><th>项目</th><th>任务</th><th>来源</th><th>测试层级</th><th>T gate</th><th>状态</th><th>模型</th><th>耗时</th></tr></thead>
           <tbody>
-            <tr><td><b>004</b> 宿主状态机</td><td class="mono">BP·T-002</td><td>unit, integration</td><td><span class="tag green">pass</span></td><td><span class="tag blue">running</span></td><td class="mono">gpt-6.1-sol</td><td>12m</td></tr>
-            <tr><td><b>005</b> 角色包加载</td><td class="mono">BP·T-008</td><td>contract, e2e</td><td><span class="tag yellow">pending</span></td><td><span class="tag yellow">waiting</span></td><td class="mono">—</td><td>—</td></tr>
-            <tr><td><b>006</b> 模型目录 UI</td><td class="mono">BP·T-012</td><td>unit, e2e</td><td><span class="tag green">pass</span></td><td><span class="tag green">merged</span></td><td class="mono">claude-opus-5-5</td><td>18m</td></tr>
-            <tr><td><b>007</b> 审批哈希</td><td class="mono">BP·T-020</td><td>integration, manual</td><td><span class="tag red">stale</span></td><td><span class="tag red">held</span></td><td class="mono">gpt-6.1-sol</td><td>9m</td></tr>
+            <tr><td><span class="tag blue">AgentLine</span></td><td><b>004</b> 宿主状态机</td><td class="mono">BP·T-002</td><td>unit, integration</td><td><span class="tag green">pass</span></td><td><span class="tag blue">running</span></td><td class="mono">gpt-6.1-sol</td><td>12m</td></tr>
+            <tr><td><span class="tag blue">AgentLine</span></td><td><b>005</b> 角色包加载</td><td class="mono">BP·T-008</td><td>contract, e2e</td><td><span class="tag yellow">pending</span></td><td><span class="tag yellow">waiting</span></td><td class="mono">—</td><td>—</td></tr>
+            <tr><td><span class="tag blue">AgentLine</span></td><td><b>006</b> 模型目录 UI</td><td class="mono">BP·T-012</td><td>unit, e2e</td><td><span class="tag green">pass</span></td><td><span class="tag green">merged</span></td><td class="mono">claude-opus-5-5</td><td>18m</td></tr>
+            <tr><td><span class="tag blue">AgentLine</span></td><td><b>007</b> 审批哈希</td><td class="mono">BP·T-020</td><td>integration, manual</td><td><span class="tag red">stale</span></td><td><span class="tag red">held</span></td><td class="mono">gpt-6.1-sol</td><td>9m</td></tr>
+            <tr><td><span class="tag">Shimeji</span></td><td><b>012</b> 激活码验签</td><td class="mono">BP·T-041</td><td>contract, integration</td><td><span class="tag green">pass</span></td><td><span class="tag blue">running</span></td><td class="mono">claude-opus-5-5</td><td>3m</td></tr>
+            <tr><td><span class="tag">Shimeji</span></td><td><b>013</b> 桌宠状态机</td><td class="mono">BP·T-044</td><td>unit, e2e</td><td><span class="tag green">pass</span></td><td><span class="tag green">merged</span></td><td class="mono">gpt-6.1-sol</td><td>22m</td></tr>
           </tbody>
         </table>
       </div>
