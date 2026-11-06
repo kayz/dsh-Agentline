@@ -1,55 +1,27 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "f59b95b26a6a96d3f38832db22890ee47636c2fd",
-  "passed": 4,
+  "git_sha": "068f72737de3ed1574b389af5e7f7c550a71a2c1",
+  "passed": 5,
   "total": 7,
   "findings": [
     {
       "severity": "P1",
-      "description": "损坏来源 JSON 仅含 kind: legacy 时绕过来源验证并允许模型调用。",
-      "evidence": "orchestrator/lib/build.mjs:193-201; orchestrator/lib/step.mjs:108-115; orchestrator/test/build-source.test.mjs:314-322"
+      "description": "CI 和评审新鲜度只检查提交，产品代码在证据产生后未提交地修改时仍可通过。",
+      "evidence": "orchestrator/lib/build.mjs:651-675,767-785"
     },
     {
-      "severity": "P1",
-      "description": "修改 acceptance.md 命令而保留 ID 时，旧 CI 报告仍可通过新鲜度检查。",
-      "evidence": "orchestrator/lib/build.mjs:371-412,432-438,455-480; orchestrator/test/build-gate.test.mjs:217-230"
+      "severity": "P2",
+      "description": "state.json 为合法 JSON 但非对象时被视作正常任务的未知状态，而非损坏错误。",
+      "evidence": "orchestrator/lib/build.mjs:951-953,977-993"
     }
   ],
   "results": [
-    {
-      "id": "AC-1",
-      "pass": true,
-      "evidence": "ci-results.json AC-1 exitCode 0, AC-1 OK"
-    },
-    {
-      "id": "AC-2",
-      "pass": false,
-      "evidence": "CI exitCode 0, 3 项通过；build.mjs:193-201; step.mjs:108-115 来源损坏可绕过"
-    },
-    {
-      "id": "AC-3",
-      "pass": true,
-      "evidence": "CI exitCode 0, 4 项通过；build-execution.test.mjs:76,92,135,181"
-    },
-    {
-      "id": "AC-4",
-      "pass": false,
-      "evidence": "CI exitCode 0, 5 项通过；build.mjs:371-412,432-438,455-480 旧报告未绑定验收命令"
-    },
-    {
-      "id": "AC-5",
-      "pass": true,
-      "evidence": "CI exitCode 0, 4 项通过；step.mjs:69-97,125-156; build.mjs:611-639"
-    },
-    {
-      "id": "AC-6",
-      "pass": false,
-      "evidence": "CI exitCode 0, 3 项通过；build.mjs:729-788 投影受上述缺陷影响的来源与 gate"
-    },
-    {
-      "id": "AC-7",
-      "pass": true,
-      "evidence": "CI exitCode 0；orchestrator 180 项和插件 20 项通过，AC-7 OK"
-    }
+    {"id":"AC-1","pass":true,"evidence":"ci-results.json AC-1 exitCode 0，末行 AC-1 OK"},
+    {"id":"AC-2","pass":true,"evidence":"ci-results.json AC-2 exitCode 0；orchestrator/lib/step.mjs:106-115；orchestrator/test/build-source.test.mjs:200,221,279,335"},
+    {"id":"AC-3","pass":true,"evidence":"ci-results.json AC-3 exitCode 0；orchestrator/test/build-execution.test.mjs:76,92,135,181"},
+    {"id":"AC-4","pass":false,"evidence":"ci-results.json AC-4 exitCode 0；orchestrator/lib/build.mjs:610-675,767-785 未检查未提交产品代码变更"},
+    {"id":"AC-5","pass":true,"evidence":"ci-results.json AC-5 exitCode 0；orchestrator/lib/step.mjs:69-97,125-147；orchestrator/test/build-roles.test.mjs:63,102,128,219"},
+    {"id":"AC-6","pass":false,"evidence":"ci-results.json AC-6 exitCode 0；orchestrator/lib/build.mjs:951-953,977-993 将非对象状态投影为正常，且投影受新鲜度缺口影响"},
+    {"id":"AC-7","pass":true,"evidence":"ci-results.json AC-7 exitCode 0，orchestrator 184 项、插件 22 项通过，末行 AC-7 OK"}
   ]
 }

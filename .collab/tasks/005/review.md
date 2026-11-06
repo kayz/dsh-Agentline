@@ -1,18 +1,20 @@
-# Review
+# 评审结论：needs_revision
 
-结论：needs_revision。验收 4/7；CI 七条命令均通过。评审 SHA：f59b95b26a6a96d3f38832db22890ee47636c2fd（读取工作树 HEAD 指向的引用文件）。
+评审提交：`068f72737de3ed1574b389af5e7f7c550a71a2c1`。验收 5/7 通过。执行证据采用编排方的 `ci-results.json`：AC-1 至 AC-7 均退出码 0，末行为对应的 `AC-n OK`；以下结论另对照实现和测试独立判断。
 
 ## Findings
 
-- **P1** 来源文件损坏可能被当作旧任务放行。build.mjs:193-197 在检查 schema 和必需字段之前，仅凭 kind: legacy 就返回成功。物化任务的 origin.json 损坏为合法 JSON {"kind":"legacy"} 后，不再核对 Blueprint、批准、节点或映射；step.mjs:108-115 允许后续模型调用。现有测试只写入无法解析的 {（build-source.test.mjs:314-322），未覆盖此反例。
-- **P1** 修改验收命令后旧 CI 报告仍可能通过。build.mjs:371-412,432-438 只比较验收项 ID；build.mjs:455-480 将整个 .collab 排除在新鲜度检查之外。保留 ID 修改并提交 acceptance.md 的命令后，旧报告仍可能为 pass，尽管新命令从未运行。应绑定验收命令内容并覆盖此反例。
+- **P1 — 未提交的产品代码变更不会使证据过期。** `orchestrator/lib/build.mjs:651` 的 CI 新鲜度只读取 HEAD 的产品提交时间；`orchestrator/lib/build.mjs:767` 的评审新鲜度只比较提交，SHA 等于 HEAD 时在第 777 行直接通过。产品文件在 CI 和评审后被修改但尚未提交时，两项仍可通过，无法证明当前工作区的代码已通过 CI 和评审。应让工作区中产品文件的变更使对应证据不通过，并覆盖该场景，同时保留仅 `.collab` 审计变动的行为。
+- **P2 — 结构损坏的状态被显示为正常任务。** `orchestrator/lib/build.mjs:951` 将非对象的 JSON 状态当作缺失状态，而第 953 行仅将解析失败视为错误。例如 `state.json` 内容为 `[]`、`null` 或字符串时，最终第 984–993 行返回 `state: 'ok'` 和未知状态，而不是要求的损坏错误。应将存在但结构无效的状态标记为错误，并在 UI 测试中验证。
 
-## 逐项结论
+## 验收逐项
 
-- AC-1 通过：ci-results.json AC-1 exitCode 0, AC-1 OK。
-- AC-2 不通过：CI exitCode 0, 3 项通过；build.mjs:193-201; step.mjs:108-115 来源损坏可绕过。
-- AC-3 通过：CI exitCode 0, 4 项通过；build-execution.test.mjs:76,92,135,181。
-- AC-4 不通过：CI exitCode 0, 5 项通过；build.mjs:371-412,432-438,455-480 旧报告未绑定验收命令。
-- AC-5 通过：CI exitCode 0, 4 项通过；step.mjs:69-97,125-156; build.mjs:611-639。
-- AC-6 不通过：CI exitCode 0, 3 项通过；build.mjs:729-788 投影受上述缺陷影响的来源与 gate。
-- AC-7 通过：CI exitCode 0；orchestrator 180 项和插件 20 项通过，AC-7 OK。
+| 项目 | 结论 | 证据 |
+|---|---|---|
+| AC-1 | 通过 | `ci-results.json` AC-1：退出码 0，末行 `AC-1 OK`。 |
+| AC-2 | 通过 | CI AC-2 通过；`orchestrator/lib/step.mjs:106` 执行前检查来源；`orchestrator/test/build-source.test.mjs:200`、`:221`、`:279`、`:335` 覆盖批准、拒绝、节点及来源情形。 |
+| AC-3 | 通过 | CI AC-3 通过；`orchestrator/test/build-execution.test.mjs:76`、`:92`、`:135`、`:181` 覆盖单步、完整运行、失败和恢复约束。 |
+| AC-4 | 不通过 | CI AC-4 通过，缺失和无效报告判定见 `orchestrator/lib/build.mjs:610`；但上述 P1 使工作区产品变更后的 CI 和评审证据仍可通过。 |
+| AC-5 | 通过 | CI AC-5 通过；`orchestrator/lib/step.mjs:69`、`:125` 约束并记录调用；`orchestrator/test/build-roles.test.mjs:63`、`:102`、`:128`、`:219` 覆盖角色、锁、身份和重试。 |
+| AC-6 | 不通过 | CI AC-6 通过；`plugin/test/build-ui.test.mjs` 覆盖真实、空、错误、重试和切换；但 P1 的错误 gate 会被投影，P2 的结构损坏状态不会显示错误。 |
+| AC-7 | 通过 | CI AC-7：退出码 0，orchestrator 184 项、插件 22 项通过，末行 `AC-7 OK`。 |
