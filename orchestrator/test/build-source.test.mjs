@@ -10,6 +10,7 @@ import {
 } from '../lib/blueprint.mjs'
 import { fixtureStdout, replyFromAdapter } from '../lib/adapters/reply.mjs'
 import { runBuild, runStep } from '../lib/step.mjs'
+import { evaluateBuildGate, readBuildTask } from '../lib/build.mjs'
 
 const GRAPH = {
   schema: 'agentline.taskgraph/v1',
@@ -275,7 +276,7 @@ test('unapproved, revoked and expired approvals refuse both step and run', async
   assert.equal(stateText(path.join(expiredRepo, '.collab', 'tasks', '001')), null)
 })
 
-test('node edits, mapping drift, corrupt origin and legacy tasks', async (t) => {
+test('node edits, mapping drift and corrupt origin', async (t) => {
   const base = await makeTask()
   t.after(() => fs.rmSync(base.repo, { recursive: true, force: true }))
   const calls = []
@@ -312,23 +313,111 @@ test('node edits, mapping drift, corrupt origin and legacy tasks', async (t) => 
   fs.cpSync(base.repo, badRepo, { recursive: true })
   t.after(() => fs.rmSync(badRepo, { recursive: true, force: true }))
   const originPath = path.join(badRepo, '.collab', 'tasks', '001', 'origin.json')
-  const before = fs.readFileSync(originPath, 'utf8')
   fs.writeFileSync(originPath, '{')
   const corrupt = await runStep({ config: base.config, repo: badRepo, taskId: '001', step: 'dev', adapterFactory: adapter, log() {}, projectCfg: {} })
   assert.equal(corrupt.reason, 'origin_corrupt')
   assert.equal(calls.length, 0)
   assert.equal(stateText(path.join(badRepo, '.collab', 'tasks', '001')), null)
-  fs.writeFileSync(originPath, before)
-  fs.rmSync(originPath)
+})
+
+function assertRecordedOriginRefused(repo, taskId) {
+  const evaluated = evaluateBuildGate(repo, path.join(repo, '.collab', 'tasks', taskId))
+  const origin = evaluated.gate.checks.find((item) => item.id === 'T.origin_valid')
+  assert.equal(origin.pass, false)
+  assert.equal(origin.evidence, 'fail:corrupt')
+  assert.equal(evaluated.result.pass, false)
+  const view = readBuildTask(repo, taskId)
+  assert.equal(view.state, 'error')
+  assert.equal(view.error, '来源损坏')
+  assert.equal(view.source, null)
+}
+
+test('a materialized task with a missing or adhoc origin does not run, and an unlisted task still does', async (t) => {
+  const base = await makeTask()
+  t.after(() => fs.rmSync(base.repo, { recursive: true, force: true }))
+  const calls = []
+  const adapter = () => ({ async run() { calls.push('no'); return { exitCode: 0, modelResolved: 'claude-des' } } })
+
+  const missingRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-build-src-'))
+  fs.cpSync(base.repo, missingRepo, { recursive: true })
+  t.after(() => fs.rmSync(missingRepo, { recursive: true, force: true }))
+  const missingDir = path.join(missingRepo, '.collab', 'tasks', '001')
+  const before = stateText(missingDir)
+  fs.rmSync(path.join(missingDir, 'origin.json'))
+  const missingStep = await runStep({
+    config: base.config, repo: missingRepo, taskId: '001', step: 'design', adapterFactory: adapter, log() {}, projectCfg: {},
+  })
+  assert.equal(missingStep.ok, false)
+  assert.equal(missingStep.reason, 'origin_corrupt')
+  assert.equal(missingStep.detail, 'missing')
+  assert.equal(calls.length, 0)
+  assert.equal(stateText(missingDir), before)
+  const missingRun = await runBuild({
+    config: base.config, repo: missingRepo, taskId: '001', adapterFactory: adapter,
+    log() {}, projectCfg: {}, maxSteps: 2, args: { inPlace: true },
+  })
+  assert.equal(missingRun.ok, false)
+  assert.equal(missingRun.reason, 'origin_corrupt')
+  assert.equal(missingRun.detail, 'missing')
+  assert.equal(calls.length, 0)
+  assert.equal(stateText(missingDir), before)
+  assertRecordedOriginRefused(missingRepo, '001')
+
+  const adhocRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-build-src-'))
+  fs.cpSync(base.repo, adhocRepo, { recursive: true })
+  t.after(() => fs.rmSync(adhocRepo, { recursive: true, force: true }))
+  const adhocDir = path.join(adhocRepo, '.collab', 'tasks', '001')
+  const adhocBefore = stateText(adhocDir)
+  fs.writeFileSync(path.join(adhocDir, 'origin.json'), JSON.stringify({
+    schema: 'agentline.origin/v1', kind: 'adhoc', reason: 'manual',
+  }))
+  const adhocStep = await runStep({
+    config: base.config, repo: adhocRepo, taskId: '001', step: 'design', adapterFactory: adapter, log() {}, projectCfg: {},
+  })
+  assert.equal(adhocStep.ok, false)
+  assert.equal(adhocStep.reason, 'origin_corrupt')
+  assert.equal(adhocStep.detail, 'adhoc')
+  assert.equal(calls.length, 0)
+  assert.equal(stateText(adhocDir), adhocBefore)
+  const adhocRun = await runBuild({
+    config: base.config, repo: adhocRepo, taskId: '001', adapterFactory: adapter,
+    log() {}, projectCfg: {}, maxSteps: 2, args: { inPlace: true },
+  })
+  assert.equal(adhocRun.ok, false)
+  assert.equal(adhocRun.reason, 'origin_corrupt')
+  assert.equal(adhocRun.detail, 'adhoc')
+  assert.equal(calls.length, 0)
+  assert.equal(stateText(adhocDir), adhocBefore)
+  assertRecordedOriginRefused(adhocRepo, '001')
+
+  const legacyDir = path.join(base.repo, '.collab', 'tasks', '099')
+  fs.mkdirSync(legacyDir, { recursive: true })
   const legacyCalls = []
   const legacy = await runStep({
-    config: base.config, repo: badRepo, taskId: '001', step: 'design',
+    config: base.config, repo: base.repo, taskId: '099', step: 'design',
     adapterFactory: buildAdapter(legacyCalls), log() {}, projectCfg: {},
   })
   assert.equal(legacy.ok, true, legacy.reason)
   assert.equal(legacy.status, 'designed')
   assert.equal(legacyCalls.length, 1)
-  assert.equal(calls.length, 0)
+  const legacyView = readBuildTask(base.repo, '099')
+  assert.equal(legacyView.state, 'ok')
+  assert.equal(legacyView.source, 'legacy')
+
+  const freeDir = path.join(base.repo, '.collab', 'tasks', '098')
+  fs.mkdirSync(freeDir, { recursive: true })
+  fs.writeFileSync(path.join(freeDir, 'origin.json'), JSON.stringify({ kind: 'adhoc', reason: 'one-off' }))
+  const freeCalls = []
+  const free = await runStep({
+    config: base.config, repo: base.repo, taskId: '098', step: 'design',
+    adapterFactory: buildAdapter(freeCalls), log() {}, projectCfg: {},
+  })
+  assert.equal(free.ok, true, free.reason)
+  assert.equal(free.status, 'designed')
+  assert.equal(freeCalls.length, 1)
+  const freeView = readBuildTask(base.repo, '098')
+  assert.equal(freeView.state, 'ok')
+  assert.equal(freeView.source, 'adhoc')
 })
 
 test('a materialized origin rewritten as kind legacy is corrupt and does not call a model', async (t) => {

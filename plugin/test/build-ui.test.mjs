@@ -252,6 +252,8 @@ function writeRealTasks(root) {
       { node: 'T-001', task: '001', node_sha256: hash },
       { node: 'T-001', task: '005', node_sha256: hash },
       { node: 'T-001', task: '006', node_sha256: hash },
+      { node: 'T-001', task: '008', node_sha256: hash },
+      { node: 'T-001', task: '009', node_sha256: hash },
     ],
   })
   writeJson(path.join(root, '.collab', 'blueprint', 'bp', 'approvals.json'), {
@@ -309,6 +311,12 @@ function writeRealTasks(root) {
   const disguised = path.join(root, '.collab', 'tasks', '007')
   writeJson(path.join(disguised, 'origin.json'), { kind: 'legacy' })
   writeJson(path.join(disguised, 'state.json'), { id: '007', status: 'designed', history: [] })
+
+  writeJson(path.join(root, '.collab', 'tasks', '008', 'state.json'), { id: '008', status: 'designed', history: [] })
+  writeJson(path.join(root, '.collab', 'tasks', '009', 'origin.json'), {
+    schema: 'agentline.origin/v1', kind: 'adhoc', reason: 'manual',
+  })
+  writeJson(path.join(root, '.collab', 'tasks', '009', 'state.json'), { id: '009', status: 'designed', history: [] })
 }
 
 function makeServer(forward) {
@@ -527,6 +535,11 @@ test.describe('build ui', { concurrency: 1 }, () => {
     assert.doesNotMatch(textOfId(root, 'build-row-006'), /旧任务/)
     assert.match(textOfId(root, 'build-row-007'), /错误/)
     assert.doesNotMatch(textOfId(root, 'build-row-007'), /旧任务/)
+    assert.match(textOfId(root, 'build-row-008'), /错误/)
+    assert.doesNotMatch(textOfId(root, 'build-row-008'), /旧任务/)
+    assert.match(textOfId(root, 'build-row-009'), /错误/)
+    assert.doesNotMatch(textOfId(root, 'build-row-009'), /旧任务/)
+    assert.doesNotMatch(textOfId(root, 'build-row-009'), /独立/)
     assert.doesNotMatch(pageText(root), /未实现/)
 
     click(root, findById(root, 'build-item-001'))
@@ -573,6 +586,16 @@ test.describe('build ui', { concurrency: 1 }, () => {
     assert.match(textOfId(root, 'build-check-T.origin_valid'), /过期/)
 
     click(root, findById(root, 'build-item-007'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
+    assert.equal(findById(root, 'build-source'), null)
+
+    click(root, findById(root, 'build-item-008'))
+    await settle(root)
+    assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
+    assert.equal(findById(root, 'build-source'), null)
+
+    click(root, findById(root, 'build-item-009'))
     await settle(root)
     assert.match(textOfId(root, 'build-task-error'), /来源损坏/)
     assert.equal(findById(root, 'build-source'), null)

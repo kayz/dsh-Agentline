@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { canonicalHash, evaluateG1, readBlueprint } from './blueprint.mjs'
+import { BLUEPRINT_DIR, canonicalHash, evaluateG1, readBlueprint } from './blueprint.mjs'
 import { GATE_SCHEMA, evaluateGate, sha256Content } from './contracts/gate.mjs'
 import { classifyError, isTransientError } from './exec.mjs'
 import { effectiveRole } from './routing.mjs'
@@ -176,14 +176,40 @@ function approvalItems(doc) {
   return { ok: true, items: doc.items.filter((item) => isObject(item)) }
 }
 
+/** 物化记录仍列出该任务时，缺失或改写后的来源不能再走旧任务路径。 */
+function materializedTask(repo, taskId) {
+  const root = path.join(repo, BLUEPRINT_DIR)
+  let entries = []
+  try { entries = fs.readdirSync(root, { withFileTypes: true }) } catch { return null }
+  const id = String(taskId)
+  for (const ent of entries) {
+    if (!ent.isDirectory()) continue
+    const file = path.join(root, ent.name, 'materialized.json')
+    let st
+    try { st = fs.statSync(file) } catch { continue }
+    if (!st.isFile()) continue
+    const parsed = readJson(file)
+    if (!parsed.ok || !isObject(parsed.value) || !Array.isArray(parsed.value.tasks)) continue
+    const row = parsed.value.tasks.find((item) => item && String(item.task) === id)
+    if (row) return { id: ent.name, row }
+  }
+  return null
+}
+
 /**
  * Blueprint 物化任务在每次步骤前重新核对来源。
- * 没有 origin.json 的旧任务放行。文件在就必须先通过 schema 和来源字段；
+ * 没有任何物化记录指向该任务、且没有 origin.json 时，旧任务放行。
+ * 物化记录仍列出该任务时，来源文件缺失或被改成 adhoc 都拒绝。
+ * 文件在就必须先通过 schema 和来源字段；
  * 缺字段、kind 被改成 legacy，或读不出来，都是损坏，不能当成旧任务。
  */
 export function inspectOrigin(repo, taskDir) {
+  const recorded = materializedTask(repo, taskIdOf(taskDir))
   const file = path.join(taskDir, 'origin.json')
-  if (!fs.existsSync(file)) return { ok: true, legacy: true, source: 'legacy', reason: null, detail: null }
+  if (!fs.existsSync(file)) {
+    if (recorded) return refuse('origin_corrupt', 'missing', { source: 'error' })
+    return { ok: true, legacy: true, source: 'legacy', reason: null, detail: null }
+  }
   let st
   try { st = fs.statSync(file) } catch (e) {
     return refuse('origin_corrupt', 'unreadable', { source: 'error' })
@@ -193,6 +219,7 @@ export function inspectOrigin(repo, taskDir) {
   if (!parsed.ok || !isObject(parsed.value)) return refuse('origin_corrupt', 'unreadable', { source: 'error' })
   const origin = parsed.value
   if (origin.kind === 'adhoc' && typeof origin.reason === 'string' && origin.reason.trim()) {
+    if (recorded) return refuse('origin_corrupt', 'adhoc', { source: 'error' })
     return { ok: true, legacy: true, source: 'adhoc', reason: null, detail: null }
   }
   const blueprintId = typeof origin.blueprint === 'string' ? origin.blueprint.trim() : ''
