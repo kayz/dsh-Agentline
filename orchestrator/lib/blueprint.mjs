@@ -207,6 +207,52 @@ function vendorOf(providerName, provider) {
   return source || providerName || ''
 }
 
+// 规范模型身份：去掉通道前缀、统一大小写。不含厂商或供应渠道。
+function normalizeModelToken(raw) {
+  if (typeof raw !== 'string') return ''
+  let s = raw.trim().toLowerCase()
+  if (!s) return ''
+  const cut = s.lastIndexOf('/')
+  if (cut >= 0 && cut < s.length - 1) s = s.slice(cut + 1)
+  return s
+}
+
+function modelIdentityTokens(entry) {
+  const tokens = new Set()
+  if (!entry || typeof entry !== 'object') return tokens
+  const id = normalizeModelToken(entry.id)
+  const canonical = normalizeModelToken(entry.canonical_id)
+  if (id) tokens.add(id)
+  if (canonical) tokens.add(canonical)
+  return tokens
+}
+
+function rolesPairwiseDistinct(candidates) {
+  if (!Array.isArray(candidates) || candidates.some((c) => !c)) return false
+  const groups = candidates.map((c) => (typeof c.identity_group === 'string' ? c.identity_group.trim() : ''))
+  if (groups.some((g) => !g) || new Set(groups).size !== candidates.length) return false
+  const seen = new Set()
+  for (const entry of candidates) {
+    const tokens = modelIdentityTokens(entry)
+    if (tokens.size === 0) return false
+    for (const token of tokens) {
+      if (seen.has(token)) return false
+      seen.add(token)
+    }
+  }
+  return true
+}
+
+function pairwiseEvidence(candidates) {
+  return candidates.map((c, i) => {
+    const role = BLUEPRINT_ROLES[i] || String(i)
+    if (!c) return `${role}=missing`
+    const tokens = [...modelIdentityTokens(c)]
+    const group = typeof c.identity_group === 'string' && c.identity_group.trim() ? c.identity_group.trim() : 'group:missing'
+    return `${role}=${tokens.join('+') || 'id:missing'}@${group}`
+  }).join(',')
+}
+
 function eligibilityFor(key, model) {
   return isRoleEligible(normalizeModel({
     key,
@@ -264,12 +310,14 @@ function resolveRoles(config, projectCfg, overrides = {}) {
     }
     if (!picked) throw new BlueprintError('E_ROLE_INELIGIBLE', `blueprint role ${role} has no eligible model: ${reasons.join('; ')}`)
     const vendor = vendorOf(picked.model.provider, picked.provider)
+    const canonicalId = typeof picked.model.canonical_id === 'string' ? picked.model.canonical_id.trim() : ''
     const identityGroup = (typeof picked.model.identity_group === 'string' && picked.model.identity_group.trim())
       ? picked.model.identity_group.trim()
-      : `${vendor}/${picked.model.id}`
+      : `${vendor}/${normalizeModelToken(canonicalId || picked.model.id) || picked.model.id}`
     resolved[role] = {
       model: picked.key,
       id: picked.model.id,
+      ...(canonicalId ? { canonical_id: canonicalId } : {}),
       tier: picked.model.tier || 'unknown',
       provider: picked.model.provider,
       vendor,
@@ -277,10 +325,9 @@ function resolveRoles(config, projectCfg, overrides = {}) {
       identity: picked.model.identity === 'verified' ? 'verified' : 'unverified',
     }
   }
-  const groups = BLUEPRINT_ROLES.map((r) => resolved[r].identity_group)
-  const ids = BLUEPRINT_ROLES.map((r) => `${resolved[r].provider}:${resolved[r].id}`)
-  if (new Set(groups).size !== 3 || new Set(ids).size !== 3) {
-    throw new BlueprintError('E_ROLE_INELIGIBLE', `blueprint roles must be pairwise distinct (identity_group and model): ${ids.join(', ')}`)
+  const assigned = BLUEPRINT_ROLES.map((r) => resolved[r])
+  if (!rolesPairwiseDistinct(assigned)) {
+    throw new BlueprintError('E_ROLE_INELIGIBLE', `blueprint roles must be pairwise distinct (identity_group and model): ${pairwiseEvidence(assigned)}`)
   }
   if (!resolved.designer.vendor || resolved.designer.vendor === resolved.reviewer.vendor) {
     throw new BlueprintError('E_ROLE_INELIGIBLE', `designer and reviewer must use different vendors (both ${resolved.designer.vendor || 'unknown'})`)
@@ -294,14 +341,18 @@ function resolveRoles(config, projectCfg, overrides = {}) {
 }
 
 function lockFromRoles(roles) {
-  const one = (role) => ({
-    key: roles[role].model,
-    id: roles[role].id,
-    identity_group: roles[role].identity_group,
-    vendor: roles[role].vendor,
-    tier: roles[role].tier,
-    identity: roles[role].identity,
-  })
+  const one = (role) => {
+    const row = {
+      key: roles[role].model,
+      id: roles[role].id,
+      identity_group: roles[role].identity_group,
+      vendor: roles[role].vendor,
+      tier: roles[role].tier,
+      identity: roles[role].identity,
+    }
+    if (roles[role].canonical_id) row.canonical_id = roles[role].canonical_id
+    return row
+  }
   return {
     schema: ROLESLOCK_SCHEMA,
     stage: 'blueprint',
@@ -1193,9 +1244,8 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
   const cTest = candidateOf(lock, 'test_architect')
   const candidates = [cDesign, cReview, cTest]
   const allTop = candidates.every((c) => c && c.tier === 'top')
-  const groups = candidates.map((c) => c && c.identity_group).filter(Boolean)
-  const keys = candidates.map((c) => c && `${c.vendor || ''}:${c.id || c.key || ''}`)
-  const pairwise = candidates.every(Boolean) && new Set(groups).size === 3 && new Set(keys).size === 3
+  // 模型身份按规范 ID 单独比较。厂商、供应渠道和 identity_group 前缀不同，不能把同一个模型算成两个。
+  const pairwise = rolesPairwiseDistinct(candidates)
   const vendorSplit = !!(cDesign && cReview && cDesign.vendor && cReview.vendor && cDesign.vendor !== cReview.vendor)
   const testDiverse = !!(cTest && cDesign && cReview && cTest.vendor && cTest.vendor !== cDesign.vendor && cTest.vendor !== cReview.vendor)
   const calls = Array.isArray(session.calls) ? session.calls : []
@@ -1247,7 +1297,7 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
     check('G1.rounds_within_limit', '业务轮次 ≤ 3', roundsOk, false, `round=${session.round && session.round.current};reviews=${reviewRounds.join(',') || 'none'}`),
     check('G1.testability_clear', 'testability 没有 open blocker，且 input_digests 等于当前值', testOk, false, tbStale.length ? 'stale_evidence:' + tbStale.join(',') : (blockers.join(',') || 'clear')),
     check('G1.all_top', '设计、评审、测试架构均为 top', allTop, false, candidates.map((c, i) => `${BLUEPRINT_ROLES[i]}=${c ? c.tier : 'missing'}`).join(',')),
-    check('G1.roles_pairwise', '三角色模型两两不同', pairwise, false, keys.join(',')),
+    check('G1.roles_pairwise', '三角色模型两两不同', pairwise, false, pairwiseEvidence(candidates)),
     check('G1.designer_reviewer_vendor', '设计与评审跨厂商', vendorSplit, false, `designer=${cDesign && cDesign.vendor};reviewer=${cReview && cReview.vendor}`),
     check('G1.test_arch_vendor_diverse', '测试架构厂商与另外两者都不同（偏好，可豁免）', testDiverse, true, `test_architect=${cTest && cTest.vendor}`),
     check('G1.identity_verified', '三角色都有已验证的实际模型身份', identityBad.length === 0, false, identityBad.join(',') || 'verified'),

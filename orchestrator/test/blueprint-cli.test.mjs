@@ -209,7 +209,7 @@ function setup() {
     try { json = JSON.parse(r.stdout) } catch { json = null }
     return { ...r, json }
   }
-  return { root, repo, config, run, callsList, dir, readState, status, fixtureCfg }
+  return { root, repo, config, run, callsList, dir, readState, status, fixtureCfg, base }
 }
 
 function drive(ctx, id) {
@@ -593,4 +593,32 @@ test('blueprint cli: non-string acceptance text and levels cannot be approved or
   assert.notEqual(mat.status, 0)
   assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
   assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '002', 'brief.md')), false)
+})
+
+test('blueprint cli: the same model on another channel cannot be started or materialized', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  const original = structuredClone(ctx.config)
+
+  ctx.config.models.rev.id = ctx.config.models.des.id
+  writeJson(ctx.base, ctx.config)
+  const created = ctx.run(['new', '--id', 'same', '--title', 'P7', '--input', '同模型', '--from-studio', 'src'])
+  assert.notEqual(created.status, 0)
+  assert.match(created.stderr, /pairwise distinct/)
+  assert.equal(fs.existsSync(ctx.dir('same')), false)
+  const approved = ctx.run(['approve', '--id', 'same', '--text', '没有会话也批准'])
+  assert.notEqual(approved.status, 0)
+  const mat = ctx.run(['materialize', '--id', 'same'])
+  assert.notEqual(mat.status, 0)
+  assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+
+  const omitted = structuredClone(original)
+  omitted.models.rev.id = omitted.models.des.id
+  delete omitted.models.des.identity_group
+  delete omitted.models.rev.identity_group
+  writeJson(ctx.base, omitted)
+  const missing = ctx.run(['new', '--id', 'omit', '--input', '缺省组', '--from-studio', 'src'])
+  assert.notEqual(missing.status, 0)
+  assert.match(missing.stderr, /pairwise distinct/)
+  assert.equal(fs.existsSync(ctx.dir('omit')), false)
 })

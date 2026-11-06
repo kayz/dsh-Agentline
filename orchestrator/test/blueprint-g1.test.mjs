@@ -163,7 +163,28 @@ function setup() {
     '--repo', repo, '--config', base, '--local', local, '--models', models,
     '--adapter-module', adapterModule,
   ], { encoding: 'utf8', env: { ...process.env, BLUEPRINT_FIXTURE: fixtureCfg } })
-  return { root, repo, run, fixtureCfg }
+  return { root, repo, run, fixtureCfg, base }
+}
+
+function alignReviewerModel(repo, id, modelId) {
+  const dir = sessionDir(repo, id)
+  const lockPath = path.join(dir, 'roles.lock.json')
+  const lock = readJson(lockPath)
+  const reviewer = lock.roles.reviewer.candidates[0]
+  reviewer.id = modelId
+  writeJson(lockPath, lock)
+  const statePath = path.join(dir, 'state.json')
+  const state = readJson(statePath)
+  for (const call of state.calls) {
+    if (call && call.ok && call.role === 'reviewer') call.model_resolved = modelId
+  }
+  writeJson(statePath, state)
+  const reviewPath = path.join(dir, 'review-v1.verdict.json')
+  const review = readJson(reviewPath)
+  review.reviewer.id = modelId
+  review.reviewer.model_resolved = modelId
+  writeJson(reviewPath, review)
+  return lock
 }
 
 function drive(ctx, id, fromStudio) {
@@ -352,6 +373,88 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     const g = evaluateG1(ctx.repo, id)
     assert.equal(check(g, 'G1.roles_pairwise').pass, false)
     assert.equal(check(g, 'G1.designer_reviewer_vendor').pass, true)
+  })
+
+  await t.test('the same model id on a different channel fails pairwise isolation and cannot be approved', () => {
+    const id = branch(ctx.repo, 'base', 'channel')
+    const dir = sessionDir(ctx.repo, id)
+    const before = readJson(path.join(dir, 'roles.lock.json'))
+    const shared = before.roles.designer.candidates[0].id
+    const keptGroup = before.roles.reviewer.candidates[0].identity_group
+    alignReviewerModel(ctx.repo, id, shared)
+    const lock = readJson(path.join(dir, 'roles.lock.json'))
+    assert.equal(lock.roles.reviewer.candidates[0].id, shared)
+    assert.notEqual(lock.roles.reviewer.candidates[0].identity_group, lock.roles.designer.candidates[0].identity_group)
+    assert.equal(lock.roles.reviewer.candidates[0].identity_group, keptGroup)
+    assert.notEqual(lock.roles.reviewer.candidates[0].vendor, lock.roles.designer.candidates[0].vendor)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.roles_pairwise').pass, false)
+    assert.match(check(g, 'G1.roles_pairwise').evidence, /claude-des/)
+    assert.equal(check(g, 'G1.designer_reviewer_vendor').pass, true)
+    assert.equal(check(g, 'G1.identity_verified').pass, true)
+    assert.equal(g.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '同模型换渠道也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.roles_pairwise|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+    assert.match(mat.stderr, /G1\.roles_pairwise|not ready|stale/)
+    assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'tasks', '001', 'brief.md')), false)
+  })
+
+  await t.test('a channel prefix or different case is still the same model identity', () => {
+    const id = branch(ctx.repo, 'base', 'canon')
+    const dir = sessionDir(ctx.repo, id)
+    const designerId = readJson(path.join(dir, 'roles.lock.json')).roles.designer.candidates[0].id
+    alignReviewerModel(ctx.repo, id, `openai/${designerId.toUpperCase()}`)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.roles_pairwise').pass, false)
+    assert.equal(check(g, 'G1.identity_verified').pass, true)
+    assert.equal(check(g, 'G1.designer_reviewer_vendor').pass, true)
+    assert.equal(g.checks_pass, false)
+  })
+
+  await t.test('a shared canonical id fails pairwise isolation when the channel ids differ', () => {
+    const id = branch(ctx.repo, 'base', 'canonid')
+    const lockPath = path.join(sessionDir(ctx.repo, id), 'roles.lock.json')
+    const lock = readJson(lockPath)
+    const designer = lock.roles.designer.candidates[0]
+    const reviewer = lock.roles.reviewer.candidates[0]
+    reviewer.canonical_id = designer.id
+    assert.notEqual(reviewer.id, designer.id)
+    assert.notEqual(reviewer.identity_group, designer.identity_group)
+    writeJson(lockPath, lock)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.roles_pairwise').pass, false)
+    assert.equal(check(g, 'G1.identity_verified').pass, true)
+    assert.equal(check(g, 'G1.designer_reviewer_vendor').pass, true)
+    assert.equal(g.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '规范身份相同也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.roles_pairwise|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
+  })
+
+  await t.test('a missing identity group does not make the same model id pairwise distinct', () => {
+    const id = branch(ctx.repo, 'base', 'nogroup')
+    const dir = sessionDir(ctx.repo, id)
+    const designerId = readJson(path.join(dir, 'roles.lock.json')).roles.designer.candidates[0].id
+    alignReviewerModel(ctx.repo, id, designerId)
+    const lockPath = path.join(dir, 'roles.lock.json')
+    const lock = readJson(lockPath)
+    delete lock.roles.reviewer.candidates[0].identity_group
+    writeJson(lockPath, lock)
+    const g = evaluateG1(ctx.repo, id)
+    assert.equal(check(g, 'G1.roles_pairwise').pass, false)
+    assert.match(check(g, 'G1.roles_pairwise').evidence, /group:missing/)
+    assert.equal(check(g, 'G1.identity_verified').pass, true)
+    assert.equal(g.checks_pass, false)
+    const approved = ctx.run(['approve', '--id', id, '--text', '没有 identity group 也批准'])
+    assert.notEqual(approved.status, 0)
+    assert.match(approved.stderr, /G1\.roles_pairwise|not ready/)
+    const mat = ctx.run(['materialize', '--id', id])
+    assert.notEqual(mat.status, 0)
   })
 
   await t.test('an advanced test architect fails all_top', () => {
@@ -817,4 +920,36 @@ test('blueprint g1: each check is judged from disk', async (t) => {
       if (fs.existsSync(briefPath)) assert.doesNotMatch(fs.readFileSync(briefPath, 'utf8'), /AC-001: 123/)
     }
   })
+})
+
+test('blueprint g1: new rejects the same model identity across channels', (t) => {
+  const ctx = setup()
+  t.after(() => fs.rmSync(ctx.root, { recursive: true, force: true }))
+  const original = readJson(ctx.base)
+
+  const sameId = structuredClone(original)
+  sameId.models.rev.id = sameId.models.des.id
+  writeJson(ctx.base, sameId)
+  const created = ctx.run(['new', '--id', 'same', '--title', 'P7', '--input', '同模型', '--from-studio', 'src'])
+  assert.notEqual(created.status, 0)
+  assert.match(created.stderr, /pairwise distinct/)
+  assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'blueprint', 'same')), false)
+
+  const omitted = structuredClone(original)
+  omitted.models.rev.id = omitted.models.des.id
+  delete omitted.models.des.identity_group
+  delete omitted.models.rev.identity_group
+  writeJson(ctx.base, omitted)
+  const missing = ctx.run(['new', '--id', 'omit', '--title', 'P7', '--input', '缺省组', '--from-studio', 'src'])
+  assert.notEqual(missing.status, 0)
+  assert.match(missing.stderr, /pairwise distinct/)
+  assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'blueprint', 'omit')), false)
+
+  const canonical = structuredClone(original)
+  canonical.models.rev.canonical_id = canonical.models.des.id
+  writeJson(ctx.base, canonical)
+  const aliased = ctx.run(['new', '--id', 'alias', '--title', 'P7', '--input', '规范身份', '--from-studio', 'src'])
+  assert.notEqual(aliased.status, 0)
+  assert.match(aliased.stderr, /pairwise distinct/)
+  assert.equal(fs.existsSync(path.join(ctx.repo, '.collab', 'blueprint', 'alias')), false)
 })

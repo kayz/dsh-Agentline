@@ -4,13 +4,13 @@
 
 | 文件 | 变更 | 用途 |
 |---|---|---|
-| `orchestrator/lib/blueprint.mjs` | 新增，并按设计收紧 G1 与物化回滚 | Blueprint 控制面：会话落盘、单步 `design → testability → review`、G1、内容哈希、批准与物化；身份和回复只从本次 stdout 解析 |
+| `orchestrator/lib/blueprint.mjs` | 新增，并按设计收紧 G1 与物化回滚 | Blueprint 控制面：会话落盘、单步 `design → testability → review`、G1、内容哈希、批准与物化；身份和回复只从本次 stdout 解析。三角色模型按规范身份单独比较，同一模型换渠道不能通过 |
 | `orchestrator/lib/adapters/reply.mjs` | 新增 | 从 Claude、CodeBuddy、Codex、Gemini、Cursor 的 stdout 取出回复正文和实际模型 |
 | `orchestrator/lib/adapters/*.mjs` | 修改 | `run()` 返回解析后的 `text`、`stdout` 和 `modelResolved`；Gemini 不再把请求模型写进 `modelResolved` |
 | `orchestrator/test/adapter-reply.test.mjs` | 新增 | 各 CLI 协议的正例，以及缺模型、多模型、Gemini 回显都不算已验证身份 |
 | `orchestrator/agentline.mjs` | 修改 | `blueprint new\|run\|review\|approve\|materialize\|status` |
-| `orchestrator/test/blueprint-cli.test.mjs` | 新增 | 六个命令、单步顺序、失败不推进、冲突、物化保真、批准失效后重新批准；夹具 stdout 走真实解析器。回显的 `modelResolved` 不能推进，只有 stdout 里的回复和模型可以 |
-| `orchestrator/test/blueprint-g1.test.mjs` | 新增，并补反例 | G1 逐项正反例；来源豁免不能通过；无标题和空任务图不能通过；损坏的 blocker/finding 不能通过；当前轮未完成不能批准；测试架构变更后必须重新评审；数字 `text` 与 `null` 层级不能通过。驱动步骤的夹具同样只提供 CLI stdout |
+| `orchestrator/test/blueprint-cli.test.mjs` | 新增 | 六个命令、单步顺序、失败不推进、冲突、物化保真、批准失效后重新批准；夹具 stdout 走真实解析器。回显的 `modelResolved` 不能推进，只有 stdout 里的回复和模型可以。同一模型换渠道时 `new` 失败，不创建会话，也不能批准或物化 |
+| `orchestrator/test/blueprint-g1.test.mjs` | 新增，并补反例 | G1 逐项正反例；来源豁免不能通过；无标题和空任务图不能通过；损坏的 blocker/finding 不能通过；当前轮未完成不能批准；测试架构变更后必须重新评审；数字 `text` 与 `null` 层级不能通过。驱动步骤的夹具同样只提供 CLI stdout。跨渠道同模型、通道前缀或大小写、共享 `canonical_id`、缺省 identity group 都不能通过，也不能批准或物化 |
 | `plugin/lib/index.js` | 修改 | `/agentline/blueprint`：GET 读落盘，POST 每次只转发一条 CLI |
 | `plugin/lib/client.js` | 修改 | Blueprint 页：真实轮次、角色、findings、任务图、G1、批准与物化；空、损坏和操作失败分开 |
 | `plugin/test/blueprint-ui.test.mjs` | 新增 | 真实路由上的空、真实、错误、项目切换、单次 CLI 和原有五个页 |
@@ -94,3 +94,23 @@ Blueprint 的 `callRole` 不再采用 adapter 对象上的 `modelResolved`。它
 | AC-5 | 通过 | `orchestrator` 的 `npm test` 157 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
 
 协议解析另有 `orchestrator/test/adapter-reply.test.mjs` 9 通过，已包含在 orchestrator 的 157 里。
+
+## 模型规范身份
+
+审查指出：同一模型走不同供应渠道时，默认 `identity_group` 是 `vendor/model.id`，预检用 `provider:model.id` 比较，G1 重算用 `vendor:id`。identity group 不同或缺省时，两个角色会被当成不同模型；各自的调用又能对上锁定的同一个 ID，于是模型隔离通过，批准和物化也能继续。
+
+现在每个角色的模型身份单独取规范 ID：配置里的 `canonical_id`，否则是 `id`；去掉通道前缀并统一大小写，不把厂商或渠道算进去。规范 ID 或 `id` 有交集，或者 `identity_group` 缺失、重复，`G1.roles_pairwise` 失败。`new` 在写会话前用同一条规则拒绝。身份核对仍要求这次调用的 `model_resolved` 等于该角色锁定的 `id`，所以调用对得上也不能把同一个模型算成两个。厂商检查不变：设计与评审仍必须跨厂商，测试架构跨厂商仍是可豁免偏好。
+
+因此这几种都不能批准，也不能物化：同一 `id` 但 identity group 和厂商都不同；`openai/CLAUDE-DES` 与 `claude-des`；通道 ID 不同但 `canonical_id` 相同；identity group 被删掉。
+
+## 自测（模型规范身份）
+
+在仓库根用 Node 跑了与 `acceptance.md` 相同的检查（本环境是 bash，不是 pwsh）。界面没有桌面浏览器，插件测试用同一套渲染桩驱动真实 `/agentline/blueprint` 路由。
+
+| AC | 结果 | 输出 / 退出码 |
+|---|---|---|
+| AC-1 | 通过 | `node --check` 三个文件后语法检查通过，退出码 0 |
+| AC-2 | 通过 | `blueprint-cli.test.mjs` 9 通过 / 0 失败，退出码 0 |
+| AC-3 | 通过 | `blueprint-g1.test.mjs` 34 通过 / 0 失败（含 32 个子例），退出码 0 |
+| AC-4 | 通过 | `blueprint-ui.test.mjs` 含在插件测试中，7 通过 / 0 失败 |
+| AC-5 | 通过 | `orchestrator` 的 `npm test` 163 通过 / 0 失败；`plugin/test/*.test.mjs` 17 通过 / 0 失败；退出码 0 |
