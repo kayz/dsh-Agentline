@@ -31,6 +31,7 @@ import { acquireLock, installCleanup } from './lib/lock.mjs'
 import { sweepInterrupted, readLock, isPidAlive, REASON } from './lib/recovery.mjs'
 import { requestStop, isStopRequested, clearControl } from './lib/control.mjs'
 import { buildSummary } from './lib/summary.mjs'
+import { readPipelineSummary, formatPipelineSummary } from './lib/pipeline.mjs'
 import { runFlow } from './lib/flow.mjs'
 import { resolveTaskDir } from './lib/worktree.mjs'
 import { appendInput, readInputs, pendingInputs, readAttention } from './lib/inputs.mjs'
@@ -316,6 +317,14 @@ async function cmdRun() {
   process.exit(r.ok ? 0 : 1)
 }
 
+async function cmdPipeline() {
+  const sub = args._[1] || 'summary'
+  if (sub !== 'summary') fail(`unknown pipeline command: ${sub}`)
+  const summary = readPipelineSummary(repo)
+  if (args.json) log(JSON.stringify(summary, null, 2))
+  else log(formatPipelineSummary(summary))
+}
+
 async function cmdFlow() {
   const code = await runFlow({ config, repo, taskId, args, runnerPath: runnerPath(), log })
   process.exit(code)
@@ -494,6 +503,7 @@ function help() {
   node agentline.mjs models discover|list|add
   node agentline.mjs roles show|set
   node agentline.mjs preflight
+  node agentline.mjs pipeline summary [--json]
   node agentline.mjs run   --task <id> --role <design|dev|review>
   node agentline.mjs flow  --task <id> [--max-rounds 2] [--resume] [--in-place] [--no-wait] [--priority] [--base <ref>]
   node agentline.mjs merge --task <id> --permission "允许合并"
@@ -519,6 +529,7 @@ function help() {
 switch (cmd) {
   case 'init': await cmdInit(); break
   case 'preflight': await cmdPreflight(); break
+  case 'pipeline': await cmdPipeline(); break
   case 'models': await cmdModels(); break
   case 'roles': cmdRoles(); break
   case 'status': cmdStatus(); break
