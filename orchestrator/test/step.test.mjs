@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { runStep, nextStep, runBuild } from '../lib/step.mjs'
+import { acquireTaskLock, releaseTaskLock } from '../lib/registry.mjs'
 import { readState } from '../lib/state.mjs'
 
 function makeRepo() {
@@ -104,9 +105,40 @@ test('build: supervisor loop stops at the step budget', async (t) => {
       return { exitCode: 0, error: null }
     },
   })
-  const r = await runBuild({ config: config(), repo, taskId: '001', adapterFactory, log: () => {}, projectCfg: {}, maxSteps: 2 })
+  const r = await runBuild({ config: config(), repo, taskId: '001', adapterFactory, log: () => {}, projectCfg: {}, maxSteps: 2, args: { inPlace: true } })
   assert.equal(r.ok, false)
   assert.equal(r.reason, 'step_budget_exceeded')
   assert.equal(r.status, 'implemented')
   assert.equal(r.steps.length, 2)
+})
+
+test('build: worktree, task lock and step ledger are wired', async (t) => {
+  const { repo } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const cfg = config()
+  cfg.worktree = { enabled: true, dir: '.collab/worktrees', baseRef: 'main' }
+  cfg.concurrency = { maxTasks: 1, wait: false, pollSeconds: 1 }
+  let n = 0
+  const adapterFactory = () => ({
+    async run({ logPath }) {
+      n++
+      const taskDir = path.dirname(path.dirname(logPath))
+      const root = path.resolve(taskDir, '../../..')
+      fs.writeFileSync(logPath, 'fake\n', 'utf8')
+      fs.writeFileSync(path.join(taskDir, 'design.md'), '# design\n', 'utf8')
+      fs.writeFileSync(path.join(taskDir, 'acceptance.md'), '- AC-1\n', 'utf8')
+      if (n > 1) {
+        fs.writeFileSync(path.join(taskDir, 'impl.md'), '# impl\n', 'utf8')
+        fs.writeFileSync(path.join(root, 'src.txt'), 'x', 'utf8')
+      }
+      return { exitCode: 0, error: null }
+    },
+  })
+  const r = await runBuild({ config: cfg, repo, taskId: '001', adapterFactory, log: () => {}, projectCfg: {}, maxSteps: 2 })
+  assert.equal(r.status, 'implemented')
+  assert.notEqual(r.repo, repo)
+  assert.ok(fs.existsSync(path.join(r.repo, '.collab', 'tasks', '001', 'step-ledger.jsonl')))
+  const lock = await acquireTaskLock(repo, '001')
+  assert.equal(lock.ok, true)
+  await releaseTaskLock(repo, '001')
 })
