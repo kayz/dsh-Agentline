@@ -1,0 +1,50 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "cd175082109c4b516f15e92f6fdd154079769010",
+  "passed": 4,
+  "total": 7,
+  "findings": [
+    {
+      "severity": "P1",
+      "description": "工作树物化记录缺失或损坏且 origin.json 缺失时，任务被当作旧任务放行；没有读取 main 上的权威物化记录，模型调用、来源 gate 和投影均可绕过校验。",
+      "evidence": "orchestrator/lib/build.mjs:180-196,206-211,665-667,839-865; orchestrator/lib/step.mjs:106-115; docs/blueprint/20261106-agentline-plugin/design-v2-delta.md:446-449; orchestrator/test/build-source.test.mjs:335-364"
+    }
+  ],
+  "results": [
+    {
+      "id": "AC-1",
+      "pass": true,
+      "evidence": "ci-results.json AC-1 exitCode 0, lastLine AC-1 OK"
+    },
+    {
+      "id": "AC-2",
+      "pass": false,
+      "evidence": "CI exitCode 0, 5 tests pass; build.mjs:180-196,206-211 skips damaged or missing worktree materialization and allows absent origin as legacy; design-v2-delta.md:446-449 identifies main as authoritative"
+    },
+    {
+      "id": "AC-3",
+      "pass": true,
+      "evidence": "CI exitCode 0, 4 tests pass; orchestrator/test/build-execution.test.mjs covers step, full run, failure, lock and recovery"
+    },
+    {
+      "id": "AC-4",
+      "pass": false,
+      "evidence": "CI exitCode 0, 6 tests pass; build.mjs:665-667 passes origin gate after the missing-evidence bypass"
+    },
+    {
+      "id": "AC-5",
+      "pass": true,
+      "evidence": "CI exitCode 0, 4 tests pass; orchestrator/test/build-roles.test.mjs covers roles, lock, identity and retry"
+    },
+    {
+      "id": "AC-6",
+      "pass": false,
+      "evidence": "CI exitCode 0, 4 tests pass; build.mjs:839-865 projects the bypassed task as legacy instead of an error"
+    },
+    {
+      "id": "AC-7",
+      "pass": true,
+      "evidence": "ci-results.json AC-7 exitCode 0, orchestrator 183 pass, plugin 21 pass, lastLine AC-7 OK"
+    }
+  ]
+}
