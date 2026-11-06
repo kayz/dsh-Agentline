@@ -1,18 +1,18 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "96b586d468e2bba1a4ad892a2e1993b2a588fdc6",
+  "git_sha": "71c164dcb43297b8e381bb6a8d16644065a3e407",
   "passed": 13,
   "total": 14,
   "findings": [
     {
       "id": "AC-6",
       "severity": "P2",
-      "problem": "项目列表轮询成功会清除独立路由读取失败的错误，但没有重新请求路由，导致设置页持续显示读取中。client.js:422–428 将 routing 置 null 并记录失败，471–473 无条件清除 routing 错误；575 每 10 秒轮询 projects，581–583 仅在 tab/project 改变时请求路由，761 随后呈现无限加载。违反 design.md:279 的错误隔离与失败不得伪装为无限加载要求。只读提取真实函数、使用内存网络桩复现：路由失败后 routing=null/error=routing-unavailable；projects 成功后 routing=null/error为空，无路由重试。应由路由自身成功响应清除其错误，撤销上游项目错误时实际重试路由。详见 review.md 问题清单。"
+      "problem": "项目列表轮询成功会清除独立路由读取失败的错误，但没有重新请求路由，导致设置页持续显示读取中。client.js:422–428 将 routing 置 null 并记录失败，471–473 无条件清除 routing 错误；575 每 10 秒轮询 projects，581–583 仅在 tab/project 改变时请求路由，761 随后呈现无限加载。违反 design.md:279 的错误隔离与失败不得伪装为无限加载要求。只读提取当前实现函数、使用内存网络桩复现（退出码 0）：路由失败后 routing=null/error=routing-unavailable；projects 成功后 routing=null/error为空，Routing calls=1，无路由重试。项目列表失败再恢复成功也留下 routing=null/error为空。应由路由自身成功响应清除其错误，撤销上游项目错误时实际重试路由。详见 review.md 问题清单。"
     }
   ],
   "evidence": [
-    "验证 SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，值为 96b586d468e2bba1a4ad892a2e1993b2a588fdc6；解压 loose commit object 后 SHA1 一致，两个产品文件统一 CRLF/LF 后与该提交 blob 一致。未执行 git 命令。",
-    "执行证据采用 ci-results.json:4，ranAt=2026-11-06T18:30:34.7986045+08:00；14 条命令均 exitCode=0。CI SHA256=523808991c4a9658b6834f96c6b40617b1ee9784de749ea144a13e8a55adea44；client.js SHA256=527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a；index.js SHA256=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157。本轮重新核对代码与提交对象，并提取当前实现函数，在内存中复现 finding。",
+    "验证 SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，值为 71c164dcb43297b8e381bb6a8d16644065a3e407；解压 loose commit object 后 SHA1 一致，两个产品文件统一 CRLF/LF 后与该提交 blob 一致。未执行 git 命令。",
+    "执行证据采用 ci-results.json:4，ranAt=2026-11-06T18:39:26.3164228+08:00；14 条命令均 exitCode=0。CI SHA256=0105fcb35116d977240f7d06eeb57c372f20732aec9527cade311c4b6823b3e9；client.js SHA256=527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a；index.js SHA256=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157。本轮重新核对代码与提交对象，并提取当前实现函数，在内存中复现 finding。",
     "AC-1 通过：ci-results.json:10–16，exitCode=0，output 为空。",
     "AC-2 通过：ci-results.json:19–25，exitCode=0，output 为空。",
     "AC-3 通过：ci-results.json:28–34，exitCode=0，OK tabs+home；client.js:61–74、108–119、532–609、630–680、994–1002 核对页签、首页、端点、持久化与页面分派。",
