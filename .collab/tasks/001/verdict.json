@@ -1,32 +1,32 @@
 {
   "verdict": "needs_revision",
-  "git_sha": "71c164dcb43297b8e381bb6a8d16644065a3e407",
+  "git_sha": "935419af3d52ef11a2b5817a67501f0bfb283572",
   "passed": 13,
   "total": 14,
   "findings": [
     {
-      "id": "AC-6",
+      "id": "AC-7",
       "severity": "P2",
-      "problem": "项目列表轮询成功会清除独立路由读取失败的错误，但没有重新请求路由，导致设置页持续显示读取中。client.js:422–428 将 routing 置 null 并记录失败，471–473 无条件清除 routing 错误；575 每 10 秒轮询 projects，581–583 仅在 tab/project 改变时请求路由，761 随后呈现无限加载。违反 design.md:279 的错误隔离与失败不得伪装为无限加载要求。只读提取当前实现函数、使用内存网络桩复现（退出码 0）：路由失败后 routing=null/error=routing-unavailable；projects 成功后 routing=null/error为空，Routing calls=1，无路由重试。项目列表失败再恢复成功也留下 routing=null/error为空。应由路由自身成功响应清除其错误，撤销上游项目错误时实际重试路由。详见 review.md 问题清单。"
+      "problem": "项目列表的正常轮询会覆盖设置页未保存的角色路由选择，并可能吞掉保存反馈。client.js:577 每 10 秒调用 loadProjects；493 对当前项目无条件调用 loadRouting；424 开启新的 routing 请求序号，435 无条件 setDraft(d)。因此在设置页选择模型/策略后，下一次项目轮询会恢复服务器旧值；保存请求若与此轮询重叠，449 的 latest 检查会直接丢弃保存成功或失败的结果。只读提取当前实现函数、使用内存网络桩已复现（退出码 0）：edited-model/speed 被改回 saved-model/quality，POST 成功后 routeMsg 仍为空。违反 design.md:108–112、229 的既有路由编辑/保存行为约定。请将项目列表刷新与路由草稿初始化分开，恢复路由错误时才按需重试，并保护未保存草稿及在途保存反馈；不需要新增 Host 字段。"
     }
   ],
   "evidence": [
-    "验证 SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，值为 71c164dcb43297b8e381bb6a8d16644065a3e407；解压 loose commit object 后 SHA1 一致，两个产品文件统一 CRLF/LF 后与该提交 blob 一致。未执行 git 命令。",
-    "执行证据采用 ci-results.json:4，ranAt=2026-11-06T18:39:26.3164228+08:00；14 条命令均 exitCode=0。CI SHA256=0105fcb35116d977240f7d06eeb57c372f20732aec9527cade311c4b6823b3e9；client.js SHA256=527f086a104769aee75880ca0aaac7b08fc3b5d8c8790eec6db7f1656fc9892a；index.js SHA256=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157。本轮重新核对代码与提交对象，并提取当前实现函数，在内存中复现 finding。",
-    "AC-1 通过：ci-results.json:10–16，exitCode=0，output 为空。",
-    "AC-2 通过：ci-results.json:19–25，exitCode=0，output 为空。",
-    "AC-3 通过：ci-results.json:28–34，exitCode=0，OK tabs+home；client.js:61–74、108–119、532–609、630–680、994–1002 核对页签、首页、端点、持久化与页面分派。",
-    "AC-4 通过：ci-results.json:37–43，exitCode=0，OK legacy ops；client.js:318–385 保留端点和请求体，814–988 保留全部任务操作、二次合并确认、ledger、执行记录与日志；272–316、496–539、571–609 核对请求和操作反馈保护及卸载清理。只读对照基准 blob，SettingsPage/SettingsSection、SafeBoundary、focusTask、HeaderChips、apply 的既有实现未变。",
-    "AC-5 通过：ci-results.json:46–52，exitCode=0，OK no mock data；client.js:683–718 投影真实会话/目录，932–941 缺失模型字段时省略，G1/T gate 明示未实现。",
-    "AC-6 不通过：ci-results.json:55–61 静态命令 exitCode=0、OK empty states，但 client.js:471–473 清除路由错误而不重试，761 显示无限加载，违背 design.md:279。只读内存函数复现输出 after routing failure: routing=null, error=routing-unavailable；after projects success: routing=null, error=空字符串; no routing retry。详见 finding AC-6。",
-    "AC-7 通过：ci-results.json:64–70，exitCode=0，OK settings+slash；client.js:675–679 命令仅复制或标为未实现，758–812 设置页迁入路由/矩阵，702–718 只读目录与 Provider 共用加载/错误、取并集及真实 availability 计数。路由错误展示问题计入 AC-6。",
-    "AC-8 通过：ci-results.json:73–79，exitCode=0，OK host routes 14；index.js:550–852 旧路由，855–874 两条新只读路由，857、868 拒绝非 GET，872–873 使用原始发现缓存且不返回原始配置。只读对照基准 blob，排除两条新增路由及路由注释后，Host 非空行完全一致。",
-    "AC-9 通过：ci-results.json:91–97，exitCode=0，OK data projection+navigation；首段同 AC-13，ci-results.json:82–88 的 exitCode=0、OK render 5 tabs 补足证据。client.js:307–315、602–609、683–718、994–1002 与默认首页、五页渲染、数据投影及跨项目回答导航断言一致。",
-    "AC-10 通过：ci-results.json:100–106，exitCode=0，OK host routes runtime；原断言覆盖空/已有会话、目录、四种非 GET 方法 405、旧 projects 路由及隔离目录内容不变；index.js:855–874 为只读模块转发，与结果一致。",
+    "验证 SHA：只读 .git:1 → C:/git/dsh-Agentline/.git/worktrees/001/HEAD:1 → C:/git/dsh-Agentline/.git/refs/heads/task/001:1，当前提交为 935419af3d52ef11a2b5817a67501f0bfb283572。解压 loose commit/tree/blob 对象并校验 SHA1；client.js、index.js 统一 CRLF/LF 后与该提交 blob 一致。未执行 git 命令。",
+    "执行证据采用 ci-results.json:4，ranAt=2026-11-06T18:46:42.3047922+08:00，14 条均 exitCode=0。SHA256：client.js=9d4d7ab8f697c328e7785f6ba26291904972e7872064d16d47df1ba359d1f08f；index.js=6599e9e9b190d3b69e44902ccaab25f119ec44d3f4df50fae996711124091157；ci-results.json=c9e63b32914c34592aeefefd0ac87286dbd9ce17dded39c42ccb4d20aaee0bc3。",
+    "AC-1 通过：ci-results.json:10–16，exitCode=0、output 为空，符合 client.js 语法检查期望。",
+    "AC-2 通过：ci-results.json:19–25，exitCode=0、output 为空，符合 index.js 语法检查期望。",
+    "AC-3 通过：ci-results.json:28–34，exitCode=0、OK tabs+home；client.js:61–74、108–119、534–611、632–681、996–1004 核对滚动页签、真实端点、轮询、持久化、首页区块与五页分派。",
+    "AC-4 通过：ci-results.json:37–43，exitCode=0、OK legacy ops；client.js:318–385 保留操作端点及请求体，816–990 保留全部任务列表/详情操作；272–316、498–531、573–611 核对请求隔离及卸载清理。只读对照基准对象，SettingsPage、SettingsSection、SafeBoundary、focusTask、HeaderChips、apply 的既有实现未变。",
+    "AC-5 通过：ci-results.json:46–52，exitCode=0、OK no mock data；client.js:685–719 投影真实会话/目录及 availability，934–943 仅展示存在的模型字段，G1/T gate 明示未实现。",
+    "AC-6 通过：ci-results.json:55–61，exitCode=0、OK empty states；client.js:548–565、642–675、685–719、763、810、820、845、936 分离加载/失败/空状态；493 对当前项目实际重试路由，422–435 回写成功或失败，先前无请求却持续加载的问题已修复。",
+    "AC-7 不通过：ci-results.json:64–70 静态命令 exitCode=0、OK settings+slash，但 client.js:577 每 10 秒执行 loadProjects，493 对未切换的当前项目也无条件 loadRouting，435 覆盖未保存 draft；449 的 latest 检查还会丢弃被轮询穿插的保存结果。只读内存复现退出码 0：编辑值 edited-model/speed 被还原为 saved-model/quality；POST 成功后 routeMsg 仍为空。违反 design.md:108–112、229。",
+    "AC-8 通过：ci-results.json:73–79，exitCode=0、OK host routes 14；index.js:855–874 新增只读转发，857、868 拒绝非 GET，872–873 使用原始发现缓存且不回传原始配置。只读比较指定基准，除新增两路由和顶部路由注释外，Host 非空行完全一致。",
+    "AC-9 通过：ci-results.json:91–97，exitCode=0、OK data projection+navigation；首段与 AC-13 共用 ci-results.json:82–88 的 OK render 5 tabs。client.js:307–315、604–611、685–719、996–1004 与默认首页、五页渲染、数据投影、项目切换及跨项目回答定位断言一致；夹具不执行异步轮询，未覆盖 AC-7 finding。",
+    "AC-10 通过：ci-results.json:100–106，exitCode=0、OK host routes runtime；原断言覆盖空/已有会话、模型目录、四种非 GET 方法返回 405、旧 projects 路由及隔离目录内容不变；index.js:855–874 与结果一致。",
     "AC-11 通过：ci-results.json:109–115，exitCode=0；输出 # tests 71、# pass 71、# fail 0、# skipped 0。",
-    "AC-12 通过：ci-results.json:118–124，exitCode=0，OK write scope；对应 acceptance.md:323–334 相对指定基准、检查 client.js/index.js/.gitignore 三个预期路径的原命令；此前缺失第一段证据的问题已消除。",
-    "AC-13 通过：ci-results.json:82–88，exitCode=0，OK render 5 tabs；client.js:254 默认首页、994–1002 五页分派。",
-    "AC-14 通过：ci-results.json:127–133，exitCode=0，OK no untracked files；对应 acceptance.md:339–345 的独立未跟踪文件检查。",
-    "独立通过 13/14，AC-6 不通过；接受编排方执行证据，未因评审环境或临时权限扣分。仅更新 review.md、verdict.json；其他轮次文件保留，brief 未指定额外报告路径。DSH 人工观察未执行，按 acceptance.md:351 不计自动判定失败。未发现 scripts/check-fast.ps1。"
+    "AC-12 通过：ci-results.json:118–124，exitCode=0、OK write scope；对应 acceptance.md:323–334 相对指定基准检查 client.js、index.js、.gitignore 的原命令，按当前 acceptance 判定。",
+    "AC-13 通过：ci-results.json:82–88，exitCode=0、OK render 5 tabs；client.js:254 默认首页、996–1004 五页分派。",
+    "AC-14 通过：ci-results.json:127–133，exitCode=0、OK no untracked files；对应 acceptance.md:339–345 的独立未跟踪文件检查。",
+    "独立通过 13/14，AC-7 不通过；接受编排方执行证据，未重跑会写盘或调用 git 的命令。仅更新 review.md、verdict.json；brief 未指定额外验收报告路径。DSH 人工观察未执行，按 acceptance.md:351 不计自动判定失败；未因评审环境或临时权限扣分。仓库未发现 scripts/check-fast.ps1。"
   ]
 }
