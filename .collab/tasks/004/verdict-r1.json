@@ -1,0 +1,16 @@
+{
+  "verdict": "needs_revision",
+  "git_sha": "e49f7c78a84ec64f6f4687b79949f8c24d92efeb",
+  "passed": 3,
+  "total": 5,
+  "findings": [
+    {"severity": "P1", "description": "G1 对落盘 AC 的 text 和 levels 类型校验不足，损坏的验收内容可能获批并被物化。", "evidence": "orchestrator/lib/blueprint.mjs:666-669,740,892-951,1029-1031,1225,1437"}
+  ],
+  "results": [
+    {"id": "AC-1", "pass": true, "evidence": ".collab/tasks/004/ci-results.json:10-16：exitCode 0，AC-1 OK"},
+    {"id": "AC-2", "pass": false, "evidence": "ci-results.json:19-25：exitCode 0，6 tests passed；blueprint.mjs:1029-1031,1437 无效 AC 可获批并写入 brief"},
+    {"id": "AC-3", "pass": false, "evidence": "ci-results.json:28-34：exitCode 0，28 tests passed；blueprint.mjs:1029-1031 未正确校验落盘 AC，blueprint-g1.test.mjs:224-728 未覆盖该反例"},
+    {"id": "AC-4", "pass": true, "evidence": "ci-results.json:37-43：exitCode 0，7 tests passed；plugin/test/blueprint-ui.test.mjs 覆盖路由、真实、空、错误、切换和动作"},
+    {"id": "AC-5", "pass": true, "evidence": "ci-results.json:46-52：exitCode 0，orchestrator 145 tests passed，plugin 17 tests passed，AC-5 OK"}
+  ]
+}
