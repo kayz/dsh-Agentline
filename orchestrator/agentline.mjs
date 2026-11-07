@@ -32,6 +32,7 @@ import {
 } from './lib/blueprint.mjs'
 import { discoverAll, saveDiscovery, discoverySummary, setRoleCandidates, addModel, formatModelTable } from './lib/models.mjs'
 import { buildCatalog } from './lib/model-catalog.mjs'
+import { requestModels } from './lib/cliworker-client.mjs'
 import { effectiveRole, readProject } from './lib/routing.mjs'
 import { executeRole, readVerdict } from './lib/exec.mjs'
 import { readState, writeState, appendRun } from './lib/state.mjs'
@@ -149,6 +150,18 @@ async function cmdModels() {
     for (const row of discoverySummary(cache)) {
       log(`${row.provider}: source=${row.source} models=${row.models}${row.warnings.length ? ' warnings=' + row.warnings.join('; ') : ''}`)
     }
+    return
+  }
+  if (sub === 'request') {
+    if (!args.level) fail('models request requires --level Top|High|Middle|Quick')
+    const result = await requestModels(config, {
+      level: args.level,
+      count: Number(args.count || 1),
+      usage: args.usage || 'Normal',
+      importance: args.importance || undefined,
+      require_readonly: args['require-readonly'] === true,
+    })
+    log(JSON.stringify(result, null, 2))
     return
   }
   if (sub === 'list' || !sub) {
