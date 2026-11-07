@@ -37,7 +37,7 @@ export const codebuddy = (cfg) => ({
     const env = envFor(cfg)
     const options = cfg.options || {}
     const args = [
-      '-p', prompt, '--model', model,
+      '-p', '--model', model,
       '--output-format', 'stream-json', '--verbose',
       '--permission-mode', options.permissionMode || 'acceptEdits',
     ]
@@ -46,6 +46,7 @@ export const codebuddy = (cfg) => ({
 
     const res = await runProcess({
       command: cfg.command, args, cwd, env, timeoutMs, logPath,
+      input: prompt,
       header: '=== PROMPT ===\n' + prompt + '\n=== STREAM ===',
       stallMinutes: cfg.limits?.stallMinutes,
       classify: classifyClaudeLine,
