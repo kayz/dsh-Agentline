@@ -683,7 +683,30 @@ function lastJsonSpan(text) {
       }
     }
   }
-  return last
+  const fallback = fallbackJsonSpan(s)
+  if (fallback && (!last || fallback[0] > last[0])) return fallback
+  if (last && jsonAt(s, last)) return last
+  return null
+}
+
+/** 反向兜底：正文里的引号可能让扫描器错位；直接枚举末尾候选并用 JSON.parse 验证。 */
+function fallbackJsonSpan(s) {
+  let best = null
+  for (let i = s.indexOf('{'); i >= 0; i = s.indexOf('{', i + 1)) {
+    for (let j = s.length - 1; j > i; j--) {
+      if (s[j] !== '}') continue
+      const span = [i, j]
+      if (jsonAt(s, span) && (!best || j - i > best[1] - best[0])) best = span
+    }
+  }
+  return best
+}
+
+function jsonAt(s, span) {
+  try {
+    const value = JSON.parse(s.slice(span[0], span[1] + 1))
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+  } catch { return false }
 }
 
 /** 从模型输出里取最后一个完整 JSON 对象（忽略代码块标记） */

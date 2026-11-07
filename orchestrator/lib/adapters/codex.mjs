@@ -123,9 +123,10 @@ export const codex = (cfg) => ({
       usageSource: usage ? 'cli_json' : 'none',
       stdout: res.stdout,
       text: reply.text,
-      modelResolved: reply.modelResolved || model,
+      modelResolved: reply.modelResolved,
       error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || failure || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },
 })
+
 
