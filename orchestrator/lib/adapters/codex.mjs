@@ -70,7 +70,7 @@ export const codex = (cfg) => ({
     const sandbox = options.sandbox || 'workspace-write'
     const approval = options.approvalPolicy || 'never'
     const args = [
-      'exec', prompt, '--model', model,
+      'exec', '--model', model,
       '-c', `approval_policy="${approval}"`,
       '-s', sandbox,
       '-C', cwd, '--skip-git-repo-check', '--json',
@@ -80,6 +80,7 @@ export const codex = (cfg) => ({
 
     const res = await runProcess({
       command: cfg.command, args, cwd, env, timeoutMs, logPath,
+      input: prompt,
       header: '=== PROMPT ===\n' + prompt + '\n=== STREAM ===',
       stallMinutes: cfg.limits?.stallMinutes,
       classify: classifyCodexLine,
@@ -122,8 +123,9 @@ export const codex = (cfg) => ({
       usageSource: usage ? 'cli_json' : 'none',
       stdout: res.stdout,
       text: reply.text,
-      modelResolved: reply.modelResolved,
+      modelResolved: reply.modelResolved || model,
       error: res.abortedReason || (res.timedOut ? 'timeout' : (res.spawnError || failure || (res.exitCode === 0 ? null : (failureText(res) || `exit ${res.exitCode}`)))),
     }
   },
 })
+
