@@ -25,6 +25,26 @@ export function worktreePath(repo, taskId, dirRel = '.collab/worktrees') {
   return path.resolve(repo, dirRel, String(taskId))
 }
 
+/**
+ * 任务输入必须在 worktree 中可读。worktree 只包含已提交内容，因此未提交的
+ * brief.md 会在模型调用前快速失败。
+ */
+export function assertTaskBrief(taskDir) {
+  const file = path.join(taskDir, 'brief.md')
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch (e) {
+    const err = new Error(`E_BRIEF_MISSING_IN_WORKTREE: ${file} 不可读：${e.message}`)
+    err.code = 'E_BRIEF_MISSING_IN_WORKTREE'
+    throw err
+  }
+  if (!text.trim()) {
+    const err = new Error(`E_BRIEF_MISSING_IN_WORKTREE: ${file} 为空`)
+    err.code = 'E_BRIEF_MISSING_IN_WORKTREE'
+    throw err
+  }
+  return text
+}
+
 function ensureExclude(commonDir, dirRel) {
   try {
     const infoDir = path.join(commonDir, 'info')

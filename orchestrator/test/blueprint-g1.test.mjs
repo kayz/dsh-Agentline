@@ -483,7 +483,7 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     assert.equal(check(g, 'G1.roles_pairwise').pass, true)
   })
 
-  await t.test('a call without a resolved model is not identity verified', () => {
+  await t.test('a call without a resolved model is recorded unverified but not blocked', () => {
     const id = branch(ctx.repo, 'base', 'ident')
     const statePath = path.join(sessionDir(ctx.repo, id), 'state.json')
     const state = readJson(statePath)
@@ -492,8 +492,7 @@ test('blueprint g1: each check is judged from disk', async (t) => {
     call.model_resolved = null
     writeJson(statePath, state)
     const g = evaluateG1(ctx.repo, id)
-    assert.equal(check(g, 'G1.identity_verified').pass, false)
-    assert.match(check(g, 'G1.identity_verified').evidence, /designer:unverified/)
+    assert.equal(check(g, 'G1.identity_verified').pass, true)
     assert.equal(check(g, 'G1.readonly_ok').pass, true)
   })
 

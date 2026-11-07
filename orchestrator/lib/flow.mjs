@@ -10,7 +10,7 @@ import path from 'node:path'
 import { executeRole, readVerdict } from './exec.mjs'
 import { readState, writeState, appendRun } from './state.mjs'
 import { runCI, ciRecord } from './ci.mjs'
-import { ensureTaskWorktree, resolveTaskDir } from './worktree.mjs'
+import { ensureTaskWorktree, resolveTaskDir, assertTaskBrief } from './worktree.mjs'
 import { acquireTaskLock, releaseTaskLock, acquireCapacity, releaseCapacity, updatePhase } from './registry.mjs'
 import { readWriteScope } from './scope.mjs'
 import { acquireLock, installCleanup, releaseLock } from './lock.mjs'
@@ -122,6 +122,16 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     if (capacity) { capacity = false; await releaseCapacity(repo, taskId) }
     if (taskLock) { taskLock = false; await releaseTaskLock(repo, taskId) }
     if (legacyLockFile) { releaseLock(legacyLockFile); legacyLockFile = null }
+  }
+
+  // worktree 只包含已提交内容。任务输入缺失时必须在这里失败，不能先调用模型。
+  try {
+    assertTaskBrief(runDir)
+  } catch (e) {
+    log(`ERROR: ${e.message}`)
+    log('任务输入（.collab/tasks/<id>/brief.md）必须先提交到 main，worktree 才能看到它。')
+    await releaseAll()
+    return 1
   }
 
   const setStatus = (status, by, extra = {}) => setStatusAt(runDir, taskId, status, by, extra)

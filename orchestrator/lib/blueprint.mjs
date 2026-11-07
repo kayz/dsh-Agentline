@@ -673,15 +673,15 @@ async function callRole({ repo, dir, role, prompt, config, adapterFactory, log, 
   if (!text.trim()) {
     throw new BlueprintError('E_MODEL_EMPTY', `${role} call returned no model reply in the ${provider.adapter || 'adapter'} result; step not advanced`)
   }
-  if (!resolved) throw new BlueprintError('E_MODEL_UNVERIFIED', `${role} call did not return model_resolved; identity is not verified`)
-  if (resolved !== model.id) throw new BlueprintError('E_MODEL_MISMATCH', `${role} model_resolved ${resolved} != requested ${model.id}`)
+  if (resolved && resolved !== model.id) throw new BlueprintError('E_MODEL_MISMATCH', `${role} model_resolved ${resolved} != requested ${model.id}`)
   return {
     text,
     model: assigned.model,
     modelId: model.id,
-    modelResolved: resolved,
+    modelResolved: resolved || null,
+    identity: resolved ? 'verified' : 'unverified',
+    identitySource: resolved ? 'stdout' : 'none',
     vendor: assigned.vendor,
-    identity: 'verified',
     readonly: true,
   }
 }
@@ -693,7 +693,8 @@ function callRecord(stepId, role, result, ok, error) {
     model: result?.model || null,
     model_id: result?.modelId || null,
     model_resolved: result?.modelResolved || null,
-    identity: ok ? 'verified' : 'unverified',
+    identity: ok ? (result?.identity || 'unverified') : 'unverified',
+    identity_source: result?.identitySource || 'none',
     readonly: ok ? true : false,
     at: nowIso(),
     ok,
@@ -984,7 +985,8 @@ function applyTestability(repo, dir, session, round, result) {
     model: result.model,
     id: result.modelId,
     model_resolved: result.modelResolved,
-    identity: 'verified',
+    identity: result.identity || 'unverified',
+    identity_source: result.identitySource || 'none',
     vendor: result.vendor,
     input_digests: {
       design_digest: digests.design_digest,
@@ -1009,7 +1011,8 @@ function applyReview(repo, dir, session, round, result) {
       model: result.model,
       id: result.modelId,
       model_resolved: result.modelResolved,
-      identity: 'verified',
+      identity: result.identity || 'unverified',
+      identity_source: result.identitySource || 'none',
       vendor: result.vendor,
     },
     input_digests: {
@@ -1268,17 +1271,16 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
     if (!cand || cand.identity !== 'verified' || !cand.id) identityBad.push(`${role}:lock`)
     if (!mine.length) identityBad.push(`${role}:no-call`)
     for (const call of mine) {
-      if (call.identity !== 'verified' || !call.model_resolved) identityBad.push(`${role}:unverified`)
-      else if (cand && call.model_resolved !== cand.id) identityBad.push(`${role}:mismatch`)
+      if (call.model_resolved && cand && call.model_resolved !== cand.id) identityBad.push(`${role}:mismatch`)
       else if (cand && call.model && cand.key && call.model !== cand.key) identityBad.push(`${role}:key`)
     }
   }
   if (last && last.value && last.value.reviewer) {
     const rev = last.value.reviewer
-    if (rev.identity !== 'verified' || !rev.model_resolved || (cReview && rev.model_resolved !== cReview.id)) identityBad.push('reviewer:artifact')
+    if ((rev.model_resolved && cReview && rev.model_resolved !== cReview.id)) identityBad.push('reviewer:artifact')
   } else identityBad.push('reviewer:artifact')
   if (r.testability) {
-    if (r.testability.identity !== 'verified' || !r.testability.model_resolved || (cTest && r.testability.model_resolved !== cTest.id)) {
+    if (r.testability.model_resolved && cTest && r.testability.model_resolved !== cTest.id) {
       identityBad.push('test_architect:artifact')
     }
   } else identityBad.push('test_architect:artifact')
@@ -1311,7 +1313,7 @@ export function evaluateG1(repo, id, { now, session: sessionOverlay = null } = {
     check('G1.roles_pairwise', '三角色模型两两不同', pairwise, false, pairwiseEvidence(candidates)),
     check('G1.designer_reviewer_vendor', '设计与评审跨厂商', vendorSplit, false, `designer=${cDesign && cDesign.vendor};reviewer=${cReview && cReview.vendor}`),
     check('G1.test_arch_vendor_diverse', '测试架构厂商与另外两者都不同（偏好，可豁免）', testDiverse, true, `test_architect=${cTest && cTest.vendor}`),
-    check('G1.identity_verified', '三角色都有已验证的实际模型身份', identityBad.length === 0, false, identityBad.join(',') || 'verified'),
+    check('G1.identity_verified', '三角色都有可用的实际调用；身份未知允许但记录 unverified，身份不一致拒绝', identityBad.length === 0, false, identityBad.join(',') || 'identity evidence present'),
     check('G1.readonly_ok', '已完成的步骤都在强制只读模式下执行', readonlyBad.length === 0, false, readonlyBad.join(',') || 'readonly'),
     check('G1.write_scope_overlap', 'write_scope 重叠只报告，不单独否决', true, false, scopeOverlap(graph)),
   ]
