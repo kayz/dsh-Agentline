@@ -49,7 +49,10 @@ export function codebuddyReply(stdout) {
   const final = results.length ? results[results.length - 1] : null
   const text = final && typeof final.result === 'string' ? final.result : ''
   const model = final && typeof final.model === 'string' ? final.model : null
-  return { text, modelResolved: sole(model ? [model] : []) }
+  const usageModels = final && final.modelUsage && typeof final.modelUsage === 'object'
+    ? Object.keys(final.modelUsage)
+    : []
+  return { text, modelResolved: sole(model ? [model] : usageModels) }
 }
 
 /**
