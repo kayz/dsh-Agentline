@@ -106,3 +106,30 @@ ERROR: reviewer call did not return model_resolved; identity is not verified
 - 会话日志：`C:\git\dsh-CLIWorker\.collab\blueprint\cliworker-v2\logs\*.log`
 - 评审结论：`review-v1/v2/v3.verdict.json`
 - CLIWorker 侧身份契约：`.collab/blueprint/cliworker-v2/design.md` 第 11 节
+
+---
+
+## D-4（P1）headless 模式下安全默认拒绝工具，dev 无法删除文件/跑命令
+
+**位置**：orchestrator/config/agentline.config.json 的 providers 默认值 + 各 adapter 的选项映射；README「安全默认」一节。
+
+**现象**：dev（codebuddy，--permission-mode acceptEdits）报告 Bash 与 PowerShell 两个工具都被权限系统拒绝，非交互模式无法弹权限确认，只能 Write 覆盖、无法删除文件，导致 design.md §3.6 要求的「迁移后 test/select.test.mjs 必须不存在」无法完成，任务在产物不完整的情况下结束。
+
+**根因**：codebuddy --help 明确写着 *Headless tool use must be pre-authorized (for example with -y)*。cceptEdits 只放行文件编辑，Bash/PowerShell 必须预先授权。AgentLine 的安全默认表只写了「默认值」，没写「headless 下这些默认会导致工具被拒」。
+
+**同类问题（多 CLI）**
+
+| CLI | 当前配置 | headless 下的表现 | 需要 |
+|---|---|---|---|
+| codebuddy | --permission-mode acceptEdits | Bash/PowerShell 被拒 | ypassPermissions 或 -y + --allowedTools |
+| claude | --permission-mode acceptEdits（README 安全默认） | 同上，编辑可、命令被拒 | ypassPermissions 或 --allowedTools Bash |
+| codex | -s workspace-write + pproval_policy=never | 命令可跑，但写范围受限 | 需要更大范围时改 -s，属预期差异 |
+| cursor / cursor-wsl | orce: true | 已放开 | 需确认是否等价于 bypass |
+| gemini | --approval-mode auto_edit | 只自动批准编辑 | 需 --approval-mode yolo 或等价 |
+
+**建议修复（分两层）**
+
+1. **AgentLine（本次运行先用配置兜住）**：providers.<name>.options 增加显式的 permissionMode / llowedTools，并在 preflight 里报告「该 provider 在 headless 下是否允许工具执行」；README 安全默认表补一列「headless 可用性」。
+2. **CLIWorker（结构性修复，落在 T-009 / T-015）**：provider 描述符必须分别声明 call.readonly_args 与 call.exec_args（可执行姿态），由 CLIWorker 生成调用方式时按 postures（readonly / write）选择；这样权限不再由每个上层各自记忆。对应 AC-025（调用方式 golden 覆盖 11 个 CLI × 4 平台）需要扩展一列 posture。
+
+**回归测试**：对一个会写文件的 fixture 任务，dev 必须能执行删除与测试命令；若 provider 未预授权，preflight 或 flow 启动阶段应以 E_TOOL_PERMISSION 快速失败，而不是让模型跑完再报「我删不了文件」。
