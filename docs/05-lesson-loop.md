@@ -372,3 +372,13 @@ state/        # 无锚点 → 匹配任意层级
 1. 忽略规则**必须锚定**（`/state/`）或用足够具体的路径（`test/fixtures/**/*.jsonl` 配例外）。
 2. 新增任务若在写域里包含目录（`lib/commands/xxx/**`），design 阶段应验证 `git check-ignore -v` 对该路径返回空。
 3. CI 应有一条检查：**任务 write_scope 里的每个路径都必须能被 `git ls-files` 或 `git status` 看见**；被忽略即失败。
+### 落地：`check-scope-visible` 门禁（2026-11-09）
+
+前述"`.gitignore` 吞掉写域路径"的规则已落成可执行检查：`scripts/check-scope-visible.mjs`（`cb28a39`）。
+
+- 遍历任务图每个任务的 `write_scope`，对每条路径跑 `git check-ignore -q --no-index`；
+- 命中即失败并报出 `T-xxx <path>`；
+- 由 `check-fast` 的 `check-*.mjs` 自动发现，无需额外接线；
+- 自带三条回归用例：无锚点 `state/` 必须报隐藏、锚定 `/state/` 必须可见、`/**` 与尾斜杠需正确归一。
+
+**关键点**：这个检查填补了既有 `check-write-scope` 的盲区 —— 后者用 `git ls-files --others --exclude-standard`，而被忽略的文件**不会**出现在该列表中，所以永远看不见这类缺失。
