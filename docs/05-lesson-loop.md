@@ -256,3 +256,35 @@ T-016 的子代理补齐了 15 条带 AC 标签的测试，全部通过（AC-036
 | **T-030 门禁 CLI 的参数形状** | 由 designer 在 `design.md` 中定义并冻结；不接受"参数未定但行为已实现" | 参数形状就是对外契约，必须先定 |
 
 **执行原则**：默认裁决只在 designer 提问时生效；它若不提问而自行选择更合理方案，视为有效的设计判断，评审通过即可合入。
+---
+
+## 附：`.gitignore` 会静默吞掉测试夹具（2026-11-09 实测）
+
+T-021 合并后主干立刻变红：
+
+```
+not ok [AC-049] the codex fixture yields the four reading fields for both windows
+error: 'usage source is not readable'
+```
+
+根因：`test/fixtures/usage/codex-session.jsonl` **从未被提交** —— `.gitignore:3:*.jsonl` 把它忽略了。作者 worktree 里该文件存在（未跟踪），所以本地绿；合并到 main 后文件不存在，测试必红。
+
+**这是"本地绿、合并红"的第三例**（前两例：`lib/cli.mjs` 冲突、flow 步骤用错版本的 fixture）。
+
+**修法**：
+
+```gitignore
+# Fixture sessions are test inputs, not local runtime output.
+!test/fixtures/**/*.jsonl
+```
+
+用 `**` 覆盖任意层级，而不是逐个 `git add -f` —— 后者只解决当下，下个夹具仍会踩坑。
+
+**检查方式**：
+
+```powershell
+git check-ignore -v --no-index test/fixtures/usage/codex-session.jsonl   # 应命中 ! 规则
+git ls-files test/fixtures | Measure-Object                              # 夹具必须在版本库里
+```
+
+**推广规则**：任何被测试读取的**数据文件**（`.jsonl`、`.json`、`.log`、`.txt`）都必须确认已进 git；`.gitignore` 里的宽泛通配（`*.jsonl`、`*.log`）要配套夹具例外。任务验收若依赖夹具，应在 brief 里显式列出夹具路径，便于 CI 校验其存在性。
