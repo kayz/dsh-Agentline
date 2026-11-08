@@ -177,3 +177,28 @@ E_BRIEF_MISSING_IN_WORKTREE: .collab/tasks/016/brief.md 不可读
 **正确做法**：按文件名白名单清理，或 `git clean -fd` 只清未跟踪文件。禁止对 `.collab/tasks/<id>` 直接 `-Recurse -Force`。
 
 排查方式：`git show "$(git log --format=%h -1 -- .collab/tasks/<id>/brief.md):.collab/tasks/<id>/brief.md"` 可从历史恢复。
+---
+
+## 附：注册表化受阻于"文件系统 seam 约束"（2026-11-08 实测）
+
+按本文前述结论对 `lib/cli.mjs` 做注册表化时，第一次实现被既有门禁拦下：
+
+```
+FAIL seams.fs lib/routes.mjs:9
+check-seams: FAILED (1 violations)
+```
+
+`check-seams` 规定只有 `lib/context.mjs`、`lib/store.mjs`（原计划含 `lib/fsx.mjs`，该项目未建）可以 `import node:fs`。而"扫描命令目录自动注册路由"必须读目录。
+
+**可行方案（按约束排序）**
+
+| 方案 | 是否越 seam | 新增命令的改动面 | 冲突面 |
+|---|---|---|---|
+| A. 目录扫描（本次尝试） | ❌ 越界 | 0 行 | 无 |
+| B. 扫描能力放进 `lib/context.mjs` | ✅ | 0 行 | 无 |
+| C. 静态 manifest 文件（每个命令追加 1 行） | ✅ | 1 行 | 1 个共享文件 |
+| D. 维持现状（改 `lib/cli.mjs` 静态表） | ✅ | 2 行 | 最热共享文件 |
+
+**结论**：正确的下一步是 **B** —— 把"列出命令模块文件"的能力加到被允许的 seam 模块（`lib/context.mjs`），再由 `lib/routes.mjs` 负责动态导入与匹配。这样既不越 seam，又能把新增命令的改动面降到 0。
+
+本文前述"共享文件是并行度硬上限"的结论不变，但补一条：**重构本身也会撞上既有的架构约束；先确认该约束允许的落点，再动手**。
