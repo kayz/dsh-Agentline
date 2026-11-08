@@ -74,3 +74,19 @@ AgentLine 协议写的是 **designer 产出 `design.md` + `acceptance.md`**，�
 - `../04-patrol-and-auto-advance.md`：巡检协议（五项体检、五件套、判定表）
 - `../05-lesson-loop.md`：教训闭环（每次故障必须产出守卫 + 回归）
 - `../06-self-evolution.md`：编排器自我进化要求
+
+## D-11（P0）任务级验收缺少"全量回归"门禁
+
+**现象**：任务只验收自己的 AC，无法发现对既有测试的破坏。实测三例：T-016 的 `discover` 把错误写到 stdout（破坏 `AC-006`）、T-003 的追踪分片破坏 `traceability.test.mjs`、T-014 的 schema 升级破坏 `config-v2.test.mjs`。三者自身 CI 全绿。
+
+**后果**：破坏只在 `merge` 时暴露，需要人工合并、跑测试、发现、回滚，且责任归属不清。
+
+**建议修复**
+
+| 项 | 内容 |
+|---|---|
+| 模板 | `brief` 固定追加一条验收：`node --test "test/unit/*.test.mjs"` 全绿 + `<AC-id> OK` 哨兵 |
+| 守卫 | `check-acceptance` 检查每个 acceptance 是否含全量回归段，缺失即失败 |
+| 证据 | 实测 T-016 加上该门禁后，自身 CI 由 4/4 变为 4/5（AC-006 红），缺陷在任务内被拦住 |
+
+优先级 P0：它是"局部通过、整体回归"这一类问题的唯一低成本解法。
