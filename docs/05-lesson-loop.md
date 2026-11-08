@@ -340,3 +340,35 @@ git ls-files test/fixtures | Measure-Object                              # 夹�
 评审时逐条核对：**声明的受影响测试是否真的被更新**。没有这一节的任务，评审直接要求补充。
 
 **判据**：如果某任务的 CI 通过了、但合并后主干变红，说明"受影响旧测试清单"缺失 —— 这类回归全部可以在 design 阶段预见。
+---
+
+## 附：`.gitignore` 是无锚点匹配，会静默吞掉整层源码目录（2026-11-09 实测）
+
+一夜间**第二次**因 `.gitignore` 丢文件，这次更严重：
+
+```gitignore
+state/        # 无锚点 → 匹配任意层级
+```
+
+结果 `lib/commands/state/` **整个命令目录对 git 不可见**：文件在磁盘上存在、测试在本地通过，但从未进入版本库；连 `check-write-scope` 的"未跟踪文件"扫描也看不到它（因为 git 认为它被忽略）。
+
+表现：T-027 的 `design.md` 6 次要求 `state backup`，写域也允许，验收却漏测 → CI 绿、合并后主干全量测试红（`E_UNKNOWN_COMMAND: state backup`），并阻塞 M1–M4 四个里程碑门禁。
+
+**修法**：把规则锚定到根。
+
+```gitignore
+/state/        # 只忽略根级运行时目录
+```
+
+**两次事故的共同结构**：
+
+| 事故 | 规则 | 被吞内容 |
+|---|---|---|
+| 第一次 | `*.jsonl` | `test/fixtures/usage/codex-session.jsonl`（测试夹具） |
+| 第二次 | `state/` | `lib/commands/state/**`（生产命令目录） |
+
+**规则**：
+
+1. 忽略规则**必须锚定**（`/state/`）或用足够具体的路径（`test/fixtures/**/*.jsonl` 配例外）。
+2. 新增任务若在写域里包含目录（`lib/commands/xxx/**`），design 阶段应验证 `git check-ignore -v` 对该路径返回空。
+3. CI 应有一条检查：**任务 write_scope 里的每个路径都必须能被 `git ls-files` 或 `git status` 看见**；被忽略即失败。
