@@ -99,6 +99,44 @@ export function cursorReply(stdout) {
   return { text: resultText || assistantText(events), modelResolved: sole(models) }
 }
 
+/**
+ * OpenAI 兼容 HTTP 响应：正文是 choices[0].message.content，
+ * 身份只取服务端回传的 body.model（请求里的模型名不会出现在这里）。
+ */
+export function httpOpenAIReply(stdout) {
+  const parsed = lastJson(stdout)
+  const choice = parsed && Array.isArray(parsed.choices) ? parsed.choices[0] : null
+  const content = choice && choice.message ? choice.message.content : null
+  const text = typeof content === 'string' ? content : ''
+  const model = parsed && typeof parsed.model === 'string' ? parsed.model.trim() : ''
+  return { text, modelResolved: model || null }
+}
+
+/**
+ * Grok CLI 只输出普通文本，不带任何模型身份字段。
+ * 按项目规则不得把 `-m` 的请求参数回显成已验证身份，因此恒为 null。
+ */
+export function grokReply(stdout) {
+  return { text: String(stdout ?? '').trim(), modelResolved: null }
+}
+
+/**
+ * agy CLI：默认 text 模式，stdout 就是正文。
+ * `--output-format json` 的实测返回是 { status, response, usage, ... }，没有 model 字段，
+ * 因此只有在本次 stdout 确实带了 model 时才采纳；绝不回填 `--model` 的请求参数。
+ */
+export function agyReply(stdout) {
+  const raw = String(stdout ?? '')
+  const parsed = lastJson(raw)
+  const isEnvelope = parsed && typeof parsed === 'object'
+    && typeof parsed.status === 'string' && typeof parsed.response === 'string'
+  if (isEnvelope) {
+    const model = typeof parsed.model === 'string' ? parsed.model.trim() : ''
+    return { text: parsed.response.trim(), modelResolved: model || null }
+  }
+  return { text: raw.trim(), modelResolved: null }
+}
+
 export function replyFromAdapter(adapterId, stdout) {
   switch (adapterId) {
     case 'claude-cli': return claudeReply(stdout)
@@ -107,6 +145,9 @@ export function replyFromAdapter(adapterId, stdout) {
     case 'gemini-cli': return geminiReply(stdout)
     case 'cursor-agent':
     case 'cursor-wsl': return cursorReply(stdout)
+    case 'http-openai': return httpOpenAIReply(stdout)
+    case 'grok-cli': return grokReply(stdout)
+    case 'agy-cli': return agyReply(stdout)
     default: return { text: '', modelResolved: null }
   }
 }
@@ -147,6 +188,19 @@ export function fixtureStdout(adapterId, model, text) {
     if (id) lines.push(JSON.stringify({ type: 'system', subtype: 'init', model: id }))
     lines.push(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: body }))
     return lines.join('\n')
+  }
+  if (adapterId === 'http-openai') {
+    const event = { choices: [{ index: 0, message: { role: 'assistant', content: body } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }
+    if (id) event.model = id
+    return JSON.stringify(event)
+  }
+  if (adapterId === 'grok-cli') {
+    // Grok 的普通文本输出没有身份字段；即使夹具传了 model 也不能写进去。
+    return body
+  }
+  if (adapterId === 'agy-cli') {
+    // agy 的默认 text 输出同样没有身份字段；夹具传 model 也不写。
+    return body
   }
   return ''
 }

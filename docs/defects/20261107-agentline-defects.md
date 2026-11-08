@@ -133,3 +133,72 @@ ERROR: reviewer call did not return model_resolved; identity is not verified
 2. **CLIWorker（结构性修复，落在 T-009 / T-015）**：provider 描述符必须分别声明 call.readonly_args 与 call.exec_args（可执行姿态），由 CLIWorker 生成调用方式时按 postures（readonly / write）选择；这样权限不再由每个上层各自记忆。对应 AC-025（调用方式 golden 覆盖 11 个 CLI × 4 平台）需要扩展一列 posture。
 
 **回归测试**：对一个会写文件的 fixture 任务，dev 必须能执行删除与测试命令；若 provider 未预授权，preflight 或 flow 启动阶段应以 E_TOOL_PERMISSION 快速失败，而不是让模型跑完再报「我删不了文件」。
+---
+
+## D-5（P1）静默超时（stall）被当成模型失败，且发现得太晚
+
+**位置**：`orchestrator/lib/exec.mjs` 的 stall 判定与候选切换逻辑；`orchestrator/config/agentline.local.json` 的 `limits.apiStallSeconds`。
+
+**现象**：`flow --task 001` 两次以 `error: "stall"` 结束，第一次在 review（gpt-6-astra / codex），第二次在 dev r2（deepseek-v4.1-flash / codebuddy）。两次日志都只有 15 行左右的中断记录，没有任何 provider 侧错误。
+
+**根因**：stall 是活性超时（liveness timeout）—— 进程起来了、认证正常，但一段时间没有任何输出。当前实现把它与「模型不可用」合并处理：
+
+1. 直接换候选模型，等于惩罚了根本没有产出任何内容的模型；
+2. 发现得太晚：`apiStallSeconds` 配成 codebuddy 900s、claude 600s、codex 300s，一次静默要等 15 分钟；
+3. 没有区分首字节（TTFT）与中途静默，模型还没开口和说到一半停住用同一个阈值；
+4. 进程被杀后 provider 侧请求可能仍在跑并计费，而 `usage: null` 让消耗不可见。
+
+**建议修复与时间安排**
+
+| 项 | 内容 | 建议时间 | 理由 |
+|---|---|---|---|
+| 1 | 拆成 `E_STALL_FIRST_BYTE`（首字节超时，默认 90s）与 `E_STALL_MID_STREAM`（中途静默） | 本周内 | 纯判定逻辑改动，无协议变更 |
+| 2 | 同一模型先重试 1 次，仍 stall 才换候选 | 本周内 | 传输抖动不应触发换模型 |
+| 3 | 下调默认阈值：codebuddy 900→180、claude 600→300、codex 保持 300 | 立即（配置即可） | 零风险，立刻见效 |
+| 4 | 开工前对目标模型做 1-token 冷启动探针，失败直接换候选 | 下一个 Blueprint（P2） | 需要新增探针与缓存 |
+| 5 | stall 时记录「errored at / waited seconds / last event type」 | 本周内 | 现在只有 `error: stall`，无法归因 |
+
+**回归测试**：模拟一个只连接不输出的假 CLI，断言 90 秒内以 `E_STALL_FIRST_BYTE` 结束、重试一次后才换候选，且 run.json 记录等待时长与最后事件类型。
+
+---
+
+## D-6（P2）失败归因缺少结构化证据，且越界修复没有一等公民流程
+
+**现象**：`task 002` 因 CI 失败阻塞时，失败原因只能靠开发者模型自己在 `impl.md` 里自述；调度器输出被截断后，失败的具体 AC 与原始输出没有聚合视图。同时，dev 发现两处**不在自己 write_scope 内**的一行修复，只能停下等待人工把文件加进写域（改 `task-graph.json` + 塞一条 `note`），这是一条旁路操作，没有记录、不可审计、也无法复用。
+
+**根因**
+
+1. 失败证据散落在 `state.json` / `notice.json` / `impl.md` / `ci-results.json` / `run.json` / `handoff/*.md`，没有统一的 `failure.json` 汇总「卡在哪一步、哪条 AC、原始输出、最后一次模型调用、换过几次模型」。
+2. `write_scope` 只参与合并分档与证据链校验，**不是运行期沙箱**：越界写入不会被阻止，只会事后发现；反过来，合理的越界修复也没有申请通道。
+3. 跨任务腐蚀没有拦截点：`task 001` 在共享文件（`scripts/check-ci.mjs`、`test/unit/traceability.test.mjs`）里留下的缺陷，直到 `task 002` 才显形。
+
+**建议修复与时间安排**
+
+| 项 | 内容 | 建议时间 |
+|---|---|---|
+| 1 | 每次 flow 结束落一份 `failure.json`：`blocked_reason`、失败 AC 列表（含 id/title/exitCode/output 尾部）、最后三次调用记录、候选切换次数 | 本周内 |
+| 2 | 增加 `scope` 子命令：dev 提交越界请求（文件、原因、diff 大小）→ 操作者批准 → 记入 `inputs.jsonl` 与 state，替代改图 + note 的旁路 | 下一个 Blueprint |
+| 3 | 合并前跑一次下游客任务验收的可用性检查（至少覆盖共享文件被改动的场景） | 下一个 Blueprint |
+| 4 | 共享文件单一属主：`scripts/check-*.mjs`、`test/unit/traceability.test.mjs` 这类基础设施文件只归一个任务写，其他任务走 scope 申请 | 下一个 Blueprint |
+
+**操作侧纪律（不进代码，进流程文档）**：任何 flow 结束，必须无条件读取 `state.json` / `notice.json` / `impl.md` / `ci-results.json` / `run.json` 五件套再下结论，不得依赖人工转述失败摘要。
+
+---
+
+## D-7（P1）验收判据可被实现方改写，且绑定实现细节
+
+**现象**：T-013 的验收要求 TAP 输出出现特定测试标题，测试实际标题不同 —— 功能通过、验收变红；dev 补一条标题，验收又要下一条，形成无限追列表。
+
+**根因（两条）**
+
+1. **判据绑定实现细节**：验收断言测试标题而非退出码，等于把内部命名变成对外契约。
+2. **作者归属错误**：cceptance.md 在 dev 轮次里被反复重写。让实现方写判决标准是利益冲突 —— 写不动就改判据。
+
+**建议修复**
+
+| 项 | 内容 |
+|---|---|
+| 契约 | AC 判据只允许断言退出码 / 输出子串 / 文件状态 / 显式哨兵；禁止测试标题、函数名、行号、其他任务状态 |
+| 归属 | cceptance.md 由 design 阶段产出，不在 dev 的 write_scope 内；改动须走 amendment |
+| 守卫 | check-acceptance：(a) 提取命令数为 0 → 失败；(b) 出现标题断言模式 → 失败；(c) 缺 AC-xxx OK 哨兵 → 失败 |
+| review | 增加一条 checklist：验收是否绑定实现细节？ |

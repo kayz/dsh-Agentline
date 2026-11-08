@@ -1,7 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { buildPrompt, ROLE_SPECS } from './prompt.mjs'
+import { buildPrompt, buildResumePrompt, ROLE_SPECS } from './prompt.mjs'
 import { readState, writeState, appendRun } from './state.mjs'
+import {
+  prepareSession, markSession, writeSession, buildSessionRecord, previousEntry,
+  collectIncrementalInput, extractSessionId, tokenRef, isSessionDeadError, redactToken,
+  redactFileSecrets, REASON,
+} from './session.mjs'
 import { getAdapter } from './adapters/index.mjs'
 import { readMailbox, archiveMailbox } from './control.mjs'
 import { hasChangesBesides, worktreeFingerprint, dropCheckpoint } from './git.mjs'
@@ -20,6 +25,7 @@ const FLOW_NOISE = [
   /\/control\.json$/,
   /\.collab\/tasks\/[^/]+\/logs\//,
   /\.collab\/tasks\/[^/]+\/handoff\//,
+  /\.collab\/tasks\/[^/]+\/sessions\//,
 ]
 
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
@@ -102,7 +108,7 @@ function artifactFresh(dir, role, round, sinceMs) {
  */
 export async function executeRole({
   config, repo, taskId, role, round = 1, modelOverride, candidateOverride, effortOverride, log,
-  adapterFactory, health = null, observeIdentity = false,
+  adapterFactory, health = null, observeIdentity = false, now = null,
 }) {
   const spec = ROLE_SPECS[role]
   const dir = path.join(repo, config.collabDir, taskId)
@@ -125,6 +131,9 @@ export async function executeRole({
   let lastError = null
   let handoff = null
   const checkpointRefs = []
+  const nowMs = now instanceof Date
+    ? now.getTime()
+    : (now != null && now !== '' && Number.isFinite(Number(now)) ? Number(now) : Date.now())
 
   for (let idx = 0; idx < candidates.length; idx++) {
     const model = candidates[idx]
@@ -137,10 +146,38 @@ export async function executeRole({
     const mailbox = readMailbox(dir)
     const pending = pendingInputs(dir)
     const userInputs = pending.map((i) => ({ kind: i.kind, text: i.text }))
-    const prompt = buildPrompt({ role, repo, dir, taskId, round, mailbox, handoff, userInputs })
+    const fullPrompt = buildPrompt({ role, repo, dir, taskId, round, mailbox, handoff, userInputs })
     const logsDir = path.join(dir, 'logs')
     fs.mkdirSync(logsDir, { recursive: true })
     const logPath = path.join(logsDir, `${role}-r${round}-${idx + 1}.log`)
+
+    // ── 会话计划：同一任务同一角色跨轮复用；review 每轮新建；不支持则显式降级 ──
+    const sessionPlan = await prepareSession({
+      adapter, taskDir: dir, role, model, provider, policy, now: nowMs,
+    })
+    let resumeToken = sessionPlan.resumeToken
+    const previousSessions = [...sessionPlan.previous]
+    const session = {
+      reused: false,
+      token_ref: resumeToken && sessionPlan.prior
+        ? (sessionPlan.prior.token_ref || tokenRef(sessionPlan.prior.session_token))
+        : null,
+      invalidated_reason: sessionPlan.invalidatedReason,
+    }
+    let resumePrompt = null
+    if (resumeToken) {
+      const incremental = await collectIncrementalInput({ repo, dir, role })
+      resumePrompt = buildResumePrompt({
+        role, repo, taskId, round,
+        summary: incremental.summary, diff: incremental.diff,
+        mailbox, userInputs,
+      })
+      log?.(`[${role} r${round}] session resume token_ref=${session.token_ref || '-'}`)
+    } else if (!sessionPlan.supported) {
+      log?.(`[${role} r${round}] session unsupported → 新建会话（${session.invalidated_reason}）`)
+    } else if (session.invalidated_reason) {
+      log?.(`[${role} r${round}] session 新建（${session.invalidated_reason}）`)
+    }
 
     log?.(`[${role} r${round}] model=${model.key}(${model.id}) provider=${model.provider} effort=${effort ?? '-'}`)
     const startedAt = new Date()
@@ -151,21 +188,61 @@ export async function executeRole({
       started_at: startedAt.toISOString(),
     })
 
-    let res = null
-    let unknownSide = false
-    for (let net = 0; net <= netRetries; net++) {
-      res = await adapter.run({
-        prompt, cwd: repo, model: model.id, effort,
-        timeoutMs: (provider.limits?.timeoutMinutes || 60) * 60_000, logPath,
-      })
-      // 未知副作用不能在同一步里重试。标记先落盘，再决定要不要下一次物理调用。
-      if (res && res.side_effects === 'unknown') {
-        unknownSide = true
-        rememberUnknownSideEffects(dir, st)
-        break
+    // 一次物理调用（含网络重试）；token 为空表示新建会话，非空表示 resume。
+    const callModel = async (token) => {
+      let out = null
+      let unknown = false
+      const prompt = token ? resumePrompt : fullPrompt
+      for (let net = 0; net <= netRetries; net++) {
+        out = await adapter.run({
+          prompt, cwd: repo, model: model.id, effort,
+          timeoutMs: (provider.limits?.timeoutMinutes || 60) * 60_000, logPath,
+          resumeToken: token || null,
+        })
+        // 未知副作用不能在同一步里重试。标记先落盘，再决定要不要下一次物理调用。
+        if (out && out.side_effects === 'unknown') {
+          unknown = true
+          rememberUnknownSideEffects(dir, st)
+          break
+        }
+        if ((out.exitCode === 0 && !out.error) || !isTransientError(out.error)) break
+        if (net < netRetries) log?.(`[${role} r${round}] ${model.key} 网络中断，原模型重试 ${net + 1}/${netRetries}: ${redactToken(out.error, token)}`)
       }
-      if ((res.exitCode === 0 && !res.error) || !isTransientError(res.error)) break
-      if (net < netRetries) log?.(`[${role} r${round}] ${model.key} 网络中断，原模型重试 ${net + 1}/${netRetries}: ${res.error}`)
+      return { res: out, unknown }
+    }
+
+    let { res, unknown: unknownSide } = await callModel(resumeToken)
+    if (resumeToken && res && res.error) res.error = redactToken(res.error, resumeToken)
+    if (resumeToken && !(res.exitCode === 0 && !res.error) && !unknownSide) {
+      // resume 失败：旧记录作废；会话确实不存在/过期时当场用完整输入新建，不假装 resume 成功。
+      const error = res.error || `exit ${res.exitCode}`
+      const marked = markSession(dir, role, {
+        state: 'invalidated', reason: REASON.RESUME_FAILED, at: new Date(nowMs).toISOString(), error,
+      })
+      session.invalidated_reason = REASON.RESUME_FAILED
+      if (marked) {
+        session.token_ref = marked.token_ref || tokenRef(marked.session_token)
+        previousSessions.push(previousEntry(marked))
+      }
+      if (isSessionDeadError(error)) {
+        resumeToken = null
+        log?.(`[${role} r${round}] session resume failed（${error}）→ 新建会话（完整输入）`)
+        ;({ res, unknown: unknownSide } = await callModel(null))
+      }
+    }
+    // 只要这次物理调用确实复用了会话，run.json 就如实记 reused=true；
+    // 之后角色产物校验失败（no_changes/no_new_work）不改变这个事实。
+    if (resumeToken && res && res.exitCode === 0 && !res.error) {
+      session.reused = true
+      session.invalidated_reason = null
+    }
+    // CLI 的 stream-json/--json 会回显 session id：日志（以及引用日志尾部的交班单）
+    // 落盘前统一抹掉，run.json/error 里也不留明文。
+    let observedSessionId = null
+    if (sessionPlan.supported) {
+      observedSessionId = extractSessionId(adapter, res)
+      redactFileSecrets(logPath, [resumeToken, observedSessionId])
+      if (res && res.error) res.error = redactToken(redactToken(res.error, resumeToken), observedSessionId)
     }
     clearLive(dir)
     const endedAt = new Date()
@@ -205,6 +282,54 @@ export async function executeRole({
     }
     record.error = res.error || null
     if (handoff) record.inherited_from = { candidate: handoff.fromIndex, model: handoff.model, file: handoff.file }
+
+    // 成功的角色调用才更新会话记录；失败/副作用未知不写「半截」active 记录。
+    if (sessionPlan.supported && ok && !unknownSide) {
+      const at = new Date(nowMs).toISOString()
+      const sessionId = observedSessionId || extractSessionId(adapter, res)
+      if (sessionId) {
+        const saved = buildSessionRecord({
+          taskId, role, modelKey: model.key, modelId: model.id, provider: model.provider,
+          cliVersion: sessionPlan.cliVersion, token: sessionId, round, nowIso: at,
+          createdAt: resumeToken && sessionPlan.prior ? sessionPlan.prior.created_at : null,
+          previous: previousSessions,
+        })
+        writeSession(dir, role, saved)
+        session.reused = Boolean(resumeToken)
+        session.token_ref = saved.token_ref
+        if (session.reused) session.invalidated_reason = null
+      } else if (resumeToken && sessionPlan.prior) {
+        // resume 成功但 provider 没回显 id：保留原 token，只刷新使用时间。
+        const saved = {
+          ...sessionPlan.prior,
+          state: 'active',
+          invalidated_reason: null,
+          invalidated_at: null,
+          last_resume_error: null,
+          last_used_at: at,
+          round,
+        }
+        writeSession(dir, role, saved)
+        session.reused = true
+        session.token_ref = saved.token_ref || tokenRef(saved.session_token)
+        session.invalidated_reason = null
+      } else {
+        // 新建成功但拿不到 id：明确标记不可复用，不能假装保存了会话。
+        writeSession(dir, role, buildSessionRecord({
+          taskId, role, modelKey: model.key, modelId: model.id, provider: model.provider,
+          cliVersion: sessionPlan.cliVersion, token: null, round, nowIso: at,
+          previous: previousSessions, invalidatedReason: REASON.ID_MISSING,
+        }))
+        session.token_ref = null
+        session.invalidated_reason = REASON.ID_MISSING
+      }
+    }
+    // run.json 只留引用/哈希，绝不写明文 session token。
+    record.session = {
+      reused: Boolean(session.reused),
+      token_ref: session.token_ref || null,
+      invalidated_reason: session.invalidated_reason || null,
+    }
 
     if (unknownSide || (res && res.side_effects === 'unknown')) {
       ok = false

@@ -75,8 +75,12 @@ export function validateConfig(config) {
     for (const [name, p] of Object.entries(config.providers)) {
       if (!p || typeof p !== 'object') { errors.push(`providers.${name} must be an object`); continue }
       if (!p.adapter) errors.push(`providers.${name}.adapter is required`)
-      if (!p.command) errors.push(`providers.${name}.command is required`)
-      if (p.transport && p.transport !== 'cli') errors.push(`providers.${name}.transport: only "cli" is supported`)
+      const transport = p.transport || 'cli'
+      if (transport !== 'cli' && transport !== 'http') {
+        errors.push(`providers.${name}.transport: only "cli" and "http" are supported`)
+      }
+      if (transport === 'cli' && !p.command) errors.push(`providers.${name}.command is required`)
+      if (transport === 'http' && !p.base_url) errors.push(`providers.${name}.base_url is required for http transport`)
     }
   }
 

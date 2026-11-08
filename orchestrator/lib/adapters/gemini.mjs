@@ -73,6 +73,10 @@ async function discoverViaApi(key) {
 export const gemini = (cfg) => ({
   id: 'gemini-cli',
   source: 'google',
+  // 本机没有安装 gemini，adapter 当前调用形态（-p/-m/-o json）也没有可核实的
+  // resume/session 参数；按协议声明 false，由调度器显式降级为新建会话。
+  capabilities: { session_resume: false },
+  resumeArgs: () => [],
   async check() {
     const env = envFor(cfg)
     const v = await runCapture(cfg.command, ['--version'], { env })

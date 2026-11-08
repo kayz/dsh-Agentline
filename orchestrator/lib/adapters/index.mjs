@@ -10,6 +10,9 @@ import { codebuddy } from './codebuddy.mjs'
 import { gemini } from './gemini.mjs'
 import { cursor } from './cursor.mjs'
 import { cursorWsl } from './cursor-wsl.mjs'
+import { httpOpenAI } from './http-openai.mjs'
+import { grokCli } from './grok-cli.mjs'
+import { agyCli } from './agy-cli.mjs'
 
 export const ADAPTERS = {
   'claude-cli': claude,
@@ -18,6 +21,9 @@ export const ADAPTERS = {
   'gemini-cli': gemini,
   'cursor-agent': cursor,
   'cursor-wsl': cursorWsl,
+  'http-openai': httpOpenAI,
+  'grok-cli': grokCli,
+  'agy-cli': agyCli,
 }
 
 export function getAdapter(providerCfg) {

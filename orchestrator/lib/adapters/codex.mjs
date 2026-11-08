@@ -34,9 +34,31 @@ export function classifyCodexLine(line) {
   return { kind: 'activity' }
 }
 
+/**
+ * Codex 会话参数（本机 `codex exec --help` / `codex exec resume --help` 实测）：
+ *   codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+ * `--json` 的首个事件是 {"type":"thread.started","thread_id":"<uuid>"}，
+ * 该 thread_id 就是 resume 参数；prompt 传 `-` 表示从 stdin 读。
+ * 注意 resume 子命令没有 -s/-C，沙箱用 -c sandbox_mode=... 覆盖。
+ */
+const resumeArgs = (token) => ['resume', String(token)]
+
 export const codex = (cfg) => ({
   id: 'codex-cli',
   source: 'openai',
+  capabilities: {
+    session_resume: true,
+    session: {
+      id_from: 'stdout_json',
+      id_path: 'thread_id',
+      reset_on: ['model_change', 'provider_change', 'contract_change'],
+    },
+  },
+  resumeArgs,
+  async version() {
+    const res = await runCapture(cfg.command, ['--version'], { env: envFor(cfg) })
+    return (String(res.stdout || '').match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/) || [''])[0] || null
+  },
   async check() {
     const env = envFor(cfg)
     const v = await runCapture(cfg.command, ['--version'], { env })
@@ -64,19 +86,28 @@ export const codex = (cfg) => ({
       return { models: [], source: 'none', warnings }
     }
   },
-  async run({ prompt, cwd, model, effort, timeoutMs, logPath }) {
+  async run({ prompt, cwd, model, effort, timeoutMs, logPath, resumeToken = null }) {
     const env = envFor(cfg)
     const options = cfg.options || {}
     const sandbox = options.sandbox || 'workspace-write'
     const approval = options.approvalPolicy || 'never'
-    const args = [
-      'exec', '--model', model,
+    const args = ['exec']
+    if (resumeToken) args.push(...resumeArgs(resumeToken))
+    args.push(
+      '--model', model,
       '-c', `approval_policy="${approval}"`,
-      '-s', sandbox,
-      '-C', cwd, '--skip-git-repo-check', '--json',
-    ]
+      '--skip-git-repo-check', '--json',
+    )
+    if (resumeToken) {
+      // resume 没有 -s/-C；cwd 由进程工作目录决定，沙箱通过配置覆盖。
+      args.push('-c', `sandbox_mode="${sandbox}"`)
+    } else {
+      args.push('-s', sandbox, '-C', cwd)
+    }
     const level = effortArgs(cfg, effort)
     if (level) args.push('-c', `model_reasoning_effort=${level}`)
+    // resume 的 prompt 用 `-` 从 stdin 读，必须放在所有选项之后。
+    if (resumeToken) args.push('-')
 
     const res = await runProcess({
       command: cfg.command, args, cwd, env, timeoutMs, logPath,

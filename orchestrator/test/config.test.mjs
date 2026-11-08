@@ -97,3 +97,39 @@ test('validateConfig reports unknown model references', () => {
   const { errors } = validateConfig(cfg)
   assert.ok(errors.some((e) => e.includes('unknown model "nope"')))
 })
+
+test('validateConfig accepts an http provider without a command', () => {
+  const cfg = {
+    ...baseConfig,
+    providers: {
+      ...baseConfig.providers,
+      'deepseek-api': {
+        source: 'DeepSeek',
+        adapter: 'http-openai',
+        transport: 'http',
+        base_url: 'https://api.deepseek.com',
+      },
+      grok: {
+        source: 'xai',
+        adapter: 'grok-cli',
+        transport: 'cli',
+        command: 'C:/Users/kayz/.grok/bin/grok.exe',
+      },
+    },
+  }
+  const { errors } = validateConfig(cfg)
+  assert.deepEqual(errors, [])
+})
+
+test('validateConfig still requires a command for cli providers and base_url for http', () => {
+  const cfg = {
+    ...baseConfig,
+    providers: {
+      broken: { source: 'xai', adapter: 'grok-cli', transport: 'cli' },
+      'broken-http': { source: 'DeepSeek', adapter: 'http-openai', transport: 'http' },
+    },
+  }
+  const { errors } = validateConfig(cfg)
+  assert.ok(errors.some((e) => e.includes('providers.broken.command is required')))
+  assert.ok(errors.some((e) => e.includes('providers.broken-http.base_url is required')))
+})

@@ -111,6 +111,21 @@ export async function diffText(cwd, maxChars = 6000) {
 }
 
 /**
+ * 最近一次「业务代码」提交的 patch（排除 .collab）。
+ * 会话复用时用它说明上一轮改了什么：review/状态提交只动 .collab，
+ * 不能把它们当成上一轮变更点。
+ */
+export async function latestProductDiff(cwd, maxChars = 6000) {
+  const commit = await git(['log', '-1', '--format=%H', '--', '.', ':(exclude).collab'], cwd)
+  const sha = commit.out.trim()
+  if (commit.code !== 0 || !/^[0-9a-f]{40}$/.test(sha)) return ''
+  const r = await git(['show', '--no-color', '--format=', '--patch', sha, '--', '.', ':(exclude).collab'], cwd)
+  const text = r.out || ''
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, maxChars)}\n…（diff 已截断，原长 ${text.length} 字符；完整内容用 \`git show ${sha.slice(0, 7)}\`）`
+}
+
+/**
  * 工作区指纹：只覆盖业务文件（排除 .collab）。
  * 用途：切换候选后，判断新候选是否真的动了东西（防止「继承即完成」）。
  */

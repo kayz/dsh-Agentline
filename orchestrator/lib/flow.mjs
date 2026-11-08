@@ -67,6 +67,8 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
   })()
   const maxRounds = Number(args['max-rounds'] ?? 2)
   const summary = []
+  // 会话复用统一在 executeRole 内完成（lib/session.mjs）：flow 只按角色/轮次调用。
+  // design/dev 跨轮复用同一 CLI session；review 每轮由角色策略强制新建。
   const runRole = (opts) => executeRole({ ...opts, adapterFactory })
 
   if (args['dry-run']) { log(`dry-run: would run design→dev→CI→review for task ${taskId} in ${repo}`); return 0 }

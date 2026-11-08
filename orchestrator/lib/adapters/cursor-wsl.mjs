@@ -27,6 +27,9 @@ function shell(cfg, cwd, model) {
 export const cursorWsl = (cfg) => ({
   id: 'cursor-wsl',
   source: 'cursor',
+  // WSL 路径没有单独验证过 session id 的读取方式；与 cursor-agent 一样声明 false。
+  capabilities: { session_resume: false },
+  resumeArgs: () => [],
   async check() {
     const env = envFor(cfg)
     const v = await runCapture(cfg.command, ['-e', 'bash', '-lc', 'agent --version'], { env })

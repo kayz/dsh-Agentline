@@ -11,9 +11,29 @@ export function parseCodebuddyModels(helpText) {
   return m[1].split(',').map((s) => s.trim()).filter(Boolean)
 }
 
+/**
+ * CodeBuddy 会话参数（本机 `codebuddy --help` 实测）：
+ *   -r, --resume [sessionId]   Resume a conversation
+ * stream-json 的 system/init 与 result 事件都带 `session_id`（实测 resume 时保持不变）。
+ */
+const resumeArgs = (token) => ['--resume', String(token)]
+
 export const codebuddy = (cfg) => ({
   id: 'codebuddy-cli',
   source: 'tencent',
+  capabilities: {
+    session_resume: true,
+    session: {
+      id_from: 'stdout_json',
+      id_path: 'session_id',
+      reset_on: ['model_change', 'provider_change', 'contract_change'],
+    },
+  },
+  resumeArgs,
+  async version() {
+    const res = await runCapture(cfg.command, ['--version'], { env: envFor(cfg) })
+    return (String(res.stdout || '').match(/\d+\.\d+\.\d+/) || [''])[0] || null
+  },
   async check() {
     const env = envFor(cfg)
     const v = await runCapture(cfg.command, ['--version'], { env })
@@ -33,7 +53,7 @@ export const codebuddy = (cfg) => ({
       return { models: [], source: 'none', warnings }
     }
   },
-  async run({ prompt, cwd, model, effort, timeoutMs, logPath }) {
+  async run({ prompt, cwd, model, effort, timeoutMs, logPath, resumeToken = null }) {
     const env = envFor(cfg)
     const options = cfg.options || {}
     const args = [
@@ -41,6 +61,7 @@ export const codebuddy = (cfg) => ({
       '--output-format', 'stream-json', '--verbose',
       '--permission-mode', options.permissionMode || 'acceptEdits',
     ]
+    if (resumeToken) args.push(...resumeArgs(resumeToken))
     const level = effortArgs(cfg, effort)
     if (level) args.push('--effort', level)
 

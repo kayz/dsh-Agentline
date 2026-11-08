@@ -41,6 +41,11 @@ export function parseCursorModels(text) {
 export const cursor = (cfg) => ({
   id: 'cursor-agent',
   source: 'cursor',
+  // `cursor-agent --help` 有 `--resume [chatId]`，但本机无法验证非交互输出里的
+  // session/chat id（模型列表与登录状态探测都因网络失败），因此按「未实现可用」
+  // 声明 false；只有声明 true 且实现可用的 provider 才允许传 resume 参数。
+  capabilities: { session_resume: false },
+  resumeArgs: () => [],
   async check() {
     const env = envFor(cfg)
     const entry = cursorEntry(cfg)

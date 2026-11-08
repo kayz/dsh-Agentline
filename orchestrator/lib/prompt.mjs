@@ -79,5 +79,49 @@ export function buildPrompt({ role, repo, dir, taskId, round = 1, mailbox = '', 
   return parts.join('\n')
 }
 
+function writeListFor(role, round) {
+  return ROLE_SPECS[role].write.map((f) => f.replace('<N>', String(round))).join('、')
+}
+
+/**
+ * 复用会话时的增量提示词：只发「上一轮结论 + 本轮 diff + 新输入」。
+ * 不再重复 buildPrompt 里的完整读取清单（brief/design/acceptance 已在会话上下文里）。
+ */
+export function buildResumePrompt({
+  role, repo, taskId, round = 1, summary = '', diff = '',
+  mailbox = '', userInputs = [], invalidatedReason = null,
+}) {
+  const s = ROLE_SPECS[role]
+  const parts = [
+    `你是本项目的【${role}】。工作目录是仓库根 ${repo}。`,
+    `这是任务 ${taskId} 的【${role}】会话续接（第 ${round} 轮）。完整 brief / design / acceptance 已在会话上下文中，本轮不重发完整文档，也不要重复已完成的工作。`,
+    invalidatedReason
+      ? `上一会话已作废（${invalidatedReason}）；下面是任务目录里提取的摘要与增量，作为本轮唯一的续接输入。`
+      : '下面是任务目录里提取的上一轮结论与本轮增量。',
+    '',
+    '## 上一轮结论',
+    summary || '（没有可用的上一轮产物摘要）',
+    '',
+    '## 本轮增量 / 变更点',
+    diff || '（工作区与最近一次业务提交都没有代码变更）',
+    '',
+    `产出：${writeListFor(role, round)}（只能创建或修改这些文件）`,
+    `禁止：修改 ${s.forbid.join('、')}；执行 git 命令；创建其它文件。`,
+    '规格仍以 design.md 与 acceptance.md 为准；只处理本轮增量。',
+  ]
+  // 续接会话也要保留 attention 协议：design 遇到致命歧义必须停下来问人。
+  if (role === 'design') {
+    parts.push('若本轮发现致命歧义且无法从现有文件判断，写 attention.json（{"question":"...","options":["..."],"default":"..."}）并停下，不要猜。')
+  }
+  if (userInputs.length) {
+    parts.push('', '## 用户输入（本轮必须纳入考虑）')
+    for (const input of userInputs) parts.push(`- [${input.kind}] ${input.text}`)
+  }
+  if (mailbox && mailbox.trim()) {
+    parts.push('', '## 用户插话（本轮必须纳入考虑）', mailbox.trim())
+  }
+  return parts.join('\n')
+}
+
 
 

@@ -56,7 +56,8 @@
     "maxSwitchesPerStage": 2,
     "networkRetries": 2,
     "handoff": true,
-    "healthReorder": false
+    "healthReorder": false,
+    "sessionTtlMinutes": 720
   },
   "effort": { "default": "high" },
   "ci": { "runner": "tools/ci-runner.ps1" },
