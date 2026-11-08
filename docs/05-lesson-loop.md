@@ -202,3 +202,18 @@ check-seams: FAILED (1 violations)
 **结论**：正确的下一步是 **B** —— 把"列出命令模块文件"的能力加到被允许的 seam 模块（`lib/context.mjs`），再由 `lib/routes.mjs` 负责动态导入与匹配。这样既不越 seam，又能把新增命令的改动面降到 0。
 
 本文前述"共享文件是并行度硬上限"的结论不变，但补一条：**重构本身也会撞上既有的架构约束；先确认该约束允许的落点，再动手**。
+### 落地结果（2026-11-08 22:10）
+
+方案 B 已实施并合入 `dsh-CLIWorker` main（commit `e2fee30`）：
+
+| 文件 | 改动 |
+|---|---|
+| `lib/context.mjs` | 新增 `listCommandFiles(dir)`（唯一被允许用 fs 的落点） |
+| `lib/routes.mjs`（新） | `collectRoutes()` 动态导入命令模块并收集 `route` 导出；`matchRoute()` 匹配；**不 import fs** |
+| `lib/cli.mjs` | 顶层 `await collectRoutes()`，`resolveRoute` 先查动态表再回落静态表（静态表保留作兼容层） |
+| `commands/paths|init|config/migrate` | 加 `export const route = { cmd, sub }` 示范 |
+| `test/unit/routes.test.mjs`（新） | 7 个用例：目录列举、自注册发现、临时目录假模块、坏模块跳过、匹配语义、同一 ESM 实例、静态回落 |
+
+**验证**：`check-seams: ok (files=41)`；`node --test "test/unit/*.test.mjs"` = **326 pass / 0 fail**（基线 319 + 7）；`cliworker paths` exit 0；无参 `cliworker` 仍 exit 1 且 stderr 以 `ERROR: usage: cliworker` 开头。
+
+**效果**：新增命令 = 在 `lib/commands/` 下新增一个导出 `route` 的模块，**不需要修改 `lib/cli.mjs`**，从根上消除"多任务争抢同一文件"的冲突源。
