@@ -156,3 +156,24 @@ Write-Output "AC-XXX OK"
 **修法**：静态路由表改为注册表模式（命令模块自注册，`cli.mjs` 只做收集与分发）。判定标准：若某文件在任务图里被 **≥2 个任务的 write_scope 命中**，它就必须先被重构为可扩展结构，或由单一属主任务先行交付骨架。
 
 **衍生规律**：任务时长与分支分叉强相关。8 小时内 4 次因分叉而重建 worktree 的，全部是耗时 > 2 小时的任务；耗时 < 30 分钟的任务无一次分叉。**长任务应主动缩短交付周期，而不是靠"再跑一轮"**。
+---
+
+## 附：清理任务目录时必须保留 brief.md（2026-11-08 实测）
+
+清理失败任务时执行了 `Remove-Item .collab/tasks/016 -Recurse -Force`，连带删除了 `brief.md` —— 导致该任务此后每次启动都报：
+
+```
+E_BRIEF_MISSING_IN_WORKTREE: .collab/tasks/016/brief.md 不可读
+任务输入必须先提交到 main，worktree 才能看到它
+```
+
+**任务目录同时存放两类东西**：
+
+| 类型 | 文件 | 清理策略 |
+|---|---|---|
+| 运行时状态 | `state.json`、`run.json`、`notice.json`、`live.json`、`ci-results.json`、`logs/`、`sessions/` | 可删 |
+| 必须进 git 的输入 | `brief.md`、`design.md`、`acceptance.md`、`handoff/` | **不可删** |
+
+**正确做法**：按文件名白名单清理，或 `git clean -fd` 只清未跟踪文件。禁止对 `.collab/tasks/<id>` 直接 `-Recurse -Force`。
+
+排查方式：`git show "$(git log --format=%h -1 -- .collab/tasks/<id>/brief.md):.collab/tasks/<id>/brief.md"` 可从历史恢复。
