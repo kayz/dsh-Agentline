@@ -217,3 +217,27 @@ check-seams: FAILED (1 violations)
 **验证**：`check-seams: ok (files=41)`；`node --test "test/unit/*.test.mjs"` = **326 pass / 0 fail**（基线 319 + 7）；`cliworker paths` exit 0；无参 `cliworker` 仍 exit 1 且 stderr 以 `ERROR: usage: cliworker` 开头。
 
 **效果**：新增命令 = 在 `lib/commands/` 下新增一个导出 `route` 的模块，**不需要修改 `lib/cli.mjs`**，从根上消除"多任务争抢同一文件"的冲突源。
+---
+
+## 附：为"积木"写测试不等于交付 AC（2026-11-08 实测）
+
+T-016 的子代理补齐了 15 条带 AC 标签的测试，全部通过（AC-036/037/039/040 各自 `--ac` 均 exit 0）。但它在报告里主动指出：
+
+> `lib/commands/discover.mjs` **不存在**，也没有 `route = {cmd:'discover', sub:null}`。dev 只落地了积木：`lib/discovery/{platform,rules,scan,wsl,inventory}.mjs`。
+
+也就是说：**AC 的标签过滤全绿，但被验收的那个命令根本没有交付**。
+
+| AC | 测试通过了什么 | 实际缺口 |
+|---|---|---|
+| AC-036 | 平台识别函数、候选排序 | 无 discover 命令/入口、无 11-CLI 契约清单 |
+| AC-037 | UTF-16LE 解析无损 | 无 per-distro `wsl:<d>` 条目生成 |
+| AC-039 | 调用方传 deny 清单时行为正确 | **生产侧没有定义 deny 清单** |
+| AC-040 | `canReuse`/`markGone` 谓词 | 无 `inventory.json` 写盘、无 delta/merge API |
+
+**教训**：`--ac` 标签过滤只能证明"有测试在跑"，不能证明"AC 描述的行为可被用户触达"。判定一个 AC 是否真正交付，必须额外检查：
+
+1. 该 AC 描述的用户可见入口是否存在（命令/导出/CLI 路由）
+2. 测试是否走那个入口，而不是只测内部函数
+3. 若入口不存在，测试只能算"积木级覆盖"，AC 状态应记为 `partial` 而不是 `covered`
+
+**建议**：在 `check-traceability` 之外增加一条规则——AC 分片标注 `covered` 时，必须同时标注"被测入口"（如 `entry: cli:discover`），且该入口能被一次冒烟调用命中。否则分片视为 `partial`。
