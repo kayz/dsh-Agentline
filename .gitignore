@@ -47,3 +47,5 @@ node_modules/
 .collab/tasks/005/notice.json
 .collab/tasks/005/live.json
 .collab/tasks/005/ci-results.json
+
+orchestrator/.collab/
