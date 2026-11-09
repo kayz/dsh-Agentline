@@ -1,8 +1,8 @@
-# AgentLine Session 集成（待 CLIWorker 完成后实施）
+# AgentLine Session 集成
 
 ## 状态
 
-**Pending**
+**Implemented**（commit `4457844`；`orchestrator/test/session.test.mjs` 覆盖）
 
 前置条件：
 
@@ -10,7 +10,7 @@
 - `SESSION-MANAGEMENT.md` 中的 start / resume / id_from / reset_on 稳定
 - CLIWorker 发布可安装版本
 
-在此之前 AgentLine 不实施代码改动。
+实现已完成；后续仅随 CLIWorker 契约变更维护。
 
 ## 背景
 
@@ -153,3 +153,5 @@ review 不得复用 design/dev。
 - token/cache 证据可查
 - 本地测试通过
 - 与 CLIWorker 契约端到端通过
+
+

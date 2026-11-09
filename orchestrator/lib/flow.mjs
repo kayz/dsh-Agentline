@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { executeRole, readVerdict } from './exec.mjs'
 import { readState, writeState, appendRun } from './state.mjs'
 import { runCI, ciRecord } from './ci.mjs'
@@ -166,6 +167,28 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     return s // null = 未声明（视为 **），[] = 不写产品代码
   }
 
+  const acceptanceHash = () => {
+    try { return 'sha256:' + crypto.createHash('sha256').update(fs.readFileSync(path.join(runDir, 'acceptance.md'))).digest('hex') }
+    catch { return null }
+  }
+  const rememberAcceptance = () => {
+    const hash = acceptanceHash()
+    if (!hash) return null
+    const cur = readState(runDir) || {}
+    writeState(runDir, { ...cur, acceptance_sha256: hash })
+    return hash
+  }
+  const acceptanceUnchanged = () => {
+    const expected = readState(runDir)?.acceptance_sha256
+    if (!expected) return true
+    const actual = acceptanceHash()
+    if (actual && actual !== expected) {
+      log('[guard] acceptance.md 在 dev 阶段被修改 → 判据不得由实现方改写')
+      return false
+    }
+    return true
+  }
+
   const ensureSlot = async (phase) => {
     if (capacity) return { ok: true }
     const r = await acquireCapacity({
@@ -189,8 +212,45 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     return { ok: true }
   }
 
-  const finish = async (result) => {
-    log('\n=== FLOW SUMMARY ===')
+  const writeFailure = (reason) => {
+    const readJson = (name) => { try { return JSON.parse(fs.readFileSync(path.join(runDir, name), 'utf8')) } catch { return null } }
+    const state = readJson('state.json') || {}
+    const ci = readJson('ci-results.json')
+    const runs = Array.isArray(readJson('run.json')) ? readJson('run.json') : []
+    const failedAc = (ci && Array.isArray(ci.results) ? ci.results : [])
+      .filter((r) => r && r.passed !== true)
+      .map((r) => ({
+        id: r.id || null,
+        title: r.title || null,
+        exitCode: r.exitCode ?? null,
+        lastLine: String(r.lastLine || '').slice(-500),
+        outputTail: String((r.output || []).join('\n')).slice(-2000),
+      }))
+    const payload = {
+      schema: 'agentline.failure/v1',
+      task: taskId,
+      blocked_reason: reason || null,
+      status: state.status || null,
+      current_role: state.role || null,
+      attempt: state.attempt ?? null,
+      switches: state.switches ?? null,
+      ci: ci ? { passed: ci.passed ?? null, total: ci.total ?? null } : null,
+      failed_ac: failedAc,
+      last_calls: runs.slice(-3).map((r) => ({
+        role: r.role, round: r.round, provider: r.provider, model_requested: r.model_requested,
+        model_resolved: r.model_resolved, exit: r.exit, error: r.error,
+        stall_evidence: r.stall_evidence || null, log_ref: r.log_ref,
+      })),
+      at: new Date().toISOString(),
+    }
+    const target = path.join(runDir, 'failure.json')
+    const tmp = target + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+    fs.renameSync(tmp, target)
+    return payload
+  }
+
+  const finish = async (result) => {    log('\n=== FLOW SUMMARY ===')
     for (const s of summary) log((s.ok ? 'OK  ' : 'FAIL') + '  ' + String(s.stage).padEnd(12) + ' model=' + (s.model ?? '-') + (s.verdict ? ' verdict=' + s.verdict : ''))
     log(result.ok ? 'result: PR READY (pr_open)' : 'result: BLOCKED - ' + result.reason)
 
@@ -201,6 +261,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
           setStatus('blocked', 'flow', { blocked_reason: result.reason || 'unknown' })
         }
       } catch (e) { log('persist blocked failed: ' + (e && e.message ? e.message : String(e))) }
+      try { writeFailure(result.reason) } catch (e) { log('failure.json failed: ' + (e && e.message ? e.message : String(e))) }
     }
 
     try {
@@ -320,6 +381,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
       if (scopeNow() === null) return finish({ ok: false, reason: 'write_scope_missing' })
     }
     summary.push({ stage: 'design', model: r.model, ok: true })
+    rememberAcceptance()
     if (stopIfRequested('design')) return finish({ ok: false, reason: STOPPED })
     if (attentionBlock('design')) return finish({ ok: false, reason: 'awaiting_human' })
     if (midAmendment('design')) return finish({ ok: false, reason: 'amendment_pending' })
@@ -339,6 +401,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     const r = await runRole({ config, repo: runRepo, taskId, role: 'dev', round: 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
     if (!r.ok) return finish({ ok: false, reason: r.state.blocked_reason })
     await commitAll(runRepo, `stage(dev): task ${taskId}`)
+    if (!acceptanceUnchanged()) return finish({ ok: false, reason: 'acceptance_mutated' })
     summary.push({ stage: 'dev', model: r.model, ok: true })
     if (stopIfRequested('dev')) return finish({ ok: false, reason: STOPPED })
     if (midAmendment('dev')) return finish({ ok: false, reason: 'amendment_pending' })
@@ -358,6 +421,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     const r = await runRole({ config, repo: runRepo, taskId, role: 'dev', round: 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
     if (!r.ok) return finish({ ok: false, reason: r.state.blocked_reason })
     await commitAll(runRepo, `fix(dev): repair after CI failure (task ${taskId})`)
+    if (!acceptanceUnchanged()) return finish({ ok: false, reason: 'acceptance_mutated' })
     ci = await doCI('after repair')
     if (!ci.ok) return finish({ ok: false, reason: 'ci_failed' })
   }
@@ -392,6 +456,7 @@ export async function runFlow({ config, repo, taskId, args = {}, runnerPath, log
     const fx = await runRole({ config, repo: runRepo, taskId, role: 'dev', round: round + 1, candidateOverride: eff.order, effortOverride: eff.effort, log })
     if (!fx.ok) return finish({ ok: false, reason: fx.state.blocked_reason })
     await commitAll(runRepo, `fix(dev-r${round + 1}): address review findings (task ${taskId})`)
+    if (!acceptanceUnchanged()) return finish({ ok: false, reason: 'acceptance_mutated' })
     ci = await doCI(`after repair r${round}`)
     if (!ci.ok) return finish({ ok: false, reason: 'ci_failed' })
     setStatus('reviewable', 'ci')

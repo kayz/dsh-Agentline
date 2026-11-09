@@ -160,7 +160,7 @@ claude / codex / codebuddy 的流式事件会被解析：`tool_use` / `item.star
 
 ## 本机插件（已升级）
 
-插件 v0.20.0 已通过标准 `dsh plugin` 流程安装：Host 已挂载，浏览器端刷新/重启 DSH 后生效。
+插件 v0.21.0 已通过标准 `dsh plugin` 流程安装：Host 已挂载，浏览器端刷新/重启 DSH 后生效。
 设置入口：**Plugins → AgentLine**（或 Settings → Plugins），可配置 orchestrator 路径、Node、默认仓库，
 以及 DeepSeek / Claude / Codex / Buddy 额度凭据（`role('secret')` 字段，只存本机 profile，不写仓库）。
 源码在本仓库 `plugin/`；真实环境验收清单见
@@ -225,6 +225,17 @@ node agentline.mjs merge --repo C:\path\to\repo --task 001 --permission "允许�
 
 需要更宽的权限（如 `danger-full-access` / `bypassPermissions`）时，在 local 配置的 `providers.<name>.options` 里显式放开，风险自负。CI 会执行 `acceptance.md` 里的命令，只应在可信仓库中使用。
 
+**Headless 工具权限**：`acceptEdits` / `auto_edit` 只自动批准文件编辑；Bash/PowerShell 等工具在非交互模式下会被拒绝。需要 dev 删除文件或跑命令时，必须显式配置：
+
+```jsonc
+"providers": {
+  "codebuddy": { "options": { "permissionMode": "bypassPermissions" } },
+  "claude":    { "options": { "permissionMode": "bypassPermissions", "allowedTools": ["Read","Write","Edit","Bash"] } }
+}
+```
+
+未预授权的 provider 不应把“模型无法删除/执行”误判为实现失败。
+
 ### 本机覆盖示例
 
 ```jsonc
@@ -285,5 +296,7 @@ a model fails, and a human merge gate.
 This repository contains the protocol/skill (`AgentLine/`) and a runnable scheduler
 core (`orchestrator/`, Node.js 20+, zero dependencies) with automatic model discovery
 and no built-in model defaults.
+
+
 
 

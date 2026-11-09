@@ -15,6 +15,7 @@ import { pendingInputs, markConsumed } from './inputs.mjs'
 
 // 网络抖动（TLS 断流、连接重置）不是模型能力问题：应重试同一模型，而不是换候选
 const TRANSIENT = /tls handshake|stream disconnected|econnreset|etimedout|socket hang up|socket disconnected|secure tls|fetch failed|reconnecting|network error|workspace routing discovery|timed out/i
+const STALL = /E_STALL|(?:^|[\s:])stall(?:$|[\s:])/i
 export function isTransientError(error) { return !!error && TRANSIENT.test(String(error)) }
 
 // 流程自身产生的文件不算产出（日志/交班单/锁/live 等）
@@ -189,10 +190,12 @@ export async function executeRole({
     })
 
     // 一次物理调用（含网络重试）；token 为空表示新建会话，非空表示 resume。
+    let lastStallEvidence = null
     const callModel = async (token) => {
       let out = null
       let unknown = false
       const prompt = token ? resumePrompt : fullPrompt
+      let stallRetryUsed = false
       for (let net = 0; net <= netRetries; net++) {
         out = await adapter.run({
           prompt, cwd: repo, model: model.id, effort,
@@ -204,6 +207,14 @@ export async function executeRole({
           unknown = true
           rememberUnknownSideEffects(dir, st)
           break
+        }
+        // 静默 stall 先视为传输/活性问题：同一模型重试一次，仍失败才换候选。
+        if (out && out.error && STALL.test(String(out.error)) && !stallRetryUsed) {
+          stallRetryUsed = true
+          lastStallEvidence = out.stall_evidence || { last_event_type: null, active_tools: null }
+          log?.(`[${role} r${round}] ${model.key} ${out.error}，原模型重试 1/1`)
+          net--
+          continue
         }
         if ((out.exitCode === 0 && !out.error) || !isTransientError(out.error)) break
         if (net < netRetries) log?.(`[${role} r${round}] ${model.key} 网络中断，原模型重试 ${net + 1}/${netRetries}: ${redactToken(out.error, token)}`)
@@ -262,6 +273,7 @@ export async function executeRole({
       usage_source: res.usage ? (res.usageSource || 'unknown') : (res.error ? 'unavailable' : 'none'),
       log_ref: path.relative(repo, logPath).replaceAll('\\', '/'),
       error: res.error || null,
+      ...(lastStallEvidence ? { stall_evidence: lastStallEvidence } : {}),
     }
 
     let ok = res.exitCode === 0 && !res.error

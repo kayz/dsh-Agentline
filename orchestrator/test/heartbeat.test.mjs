@@ -57,3 +57,37 @@ test('heartbeat: a 429 rate-limit line aborts immediately', { timeout: 15_000 },
   assert.equal(res.exitCode, 125)
   assert.equal(res.abortedReason, 'rate_limit')
 })
+
+test('heartbeat: first-byte silence is E_STALL_FIRST_BYTE with evidence', { timeout: 20_000 }, async () => {
+  const script = "setTimeout(() => {}, 15000)"
+  const res = await runProcess({
+    command: process.execPath,
+    args: ['-e', script],
+    cwd: os.tmpdir(),
+    timeoutMs: 15_000,
+    stallMinutes: 0,
+    classify,
+    apiStallSeconds: 1,
+    toolStallMinutes: 1,
+  })
+  assert.equal(res.exitCode, 125)
+  assert.equal(res.abortedReason, 'E_STALL_FIRST_BYTE')
+  assert.ok(res.stall_evidence && res.stall_evidence.waited_ms >= 1000)
+})
+
+test('heartbeat: silence after an event is E_STALL_MID_STREAM', { timeout: 20_000 }, async () => {
+  const script = "process.stdout.write('event\\n'); setTimeout(() => {}, 15000)"
+  const res = await runProcess({
+    command: process.execPath,
+    args: ['-e', script],
+    cwd: os.tmpdir(),
+    timeoutMs: 15_000,
+    stallMinutes: 0,
+    classify,
+    apiStallSeconds: 1,
+    toolStallMinutes: 1,
+  })
+  assert.equal(res.exitCode, 125)
+  assert.equal(res.abortedReason, 'E_STALL_MID_STREAM')
+  assert.equal(res.stall_evidence.last_event_type, 'activity')
+})

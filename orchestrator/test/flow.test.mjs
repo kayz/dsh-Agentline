@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { executeRole } from '../lib/exec.mjs'
+import { runFlow } from '../lib/flow.mjs'
 
 function makeRepo() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'agentline-flow-'))
@@ -107,4 +108,48 @@ test('inheriting without new work fails as no_new_work', async (t) => {
   assert.equal(r.ok, false)
   assert.equal(runs[1].error, 'no_new_work')
   assert.equal(r.state.status, 'blocked')
+})
+
+test('stall retries the same model once before switching candidates', async (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  let calls = 0
+  const adapterFactory = () => ({
+    async run({ model, logPath }) {
+      calls += 1
+      fs.writeFileSync(logPath, `fake ${model}\n`, 'utf8')
+      if (calls === 1) {
+        return { exitCode: 125, error: 'E_STALL_FIRST_BYTE', abortedReason: 'E_STALL_FIRST_BYTE', stall_evidence: { waited_ms: 90000, last_event_type: null, active_tools: 0 } }
+      }
+      fs.writeFileSync(path.join(taskDir, 'design.md'), '# design\n', 'utf8')
+      fs.writeFileSync(path.join(taskDir, 'acceptance.md'), '- AC-1: x\n', 'utf8')
+      return { exitCode: 0, error: null }
+    },
+  })
+  const r = await executeRole({ config: configFor(), repo, taskId: '001', role: 'design', adapterFactory, log: () => {} })
+  assert.equal(r.ok, true)
+  assert.equal(r.model, 'a')
+  assert.equal(calls, 2)
+  const runs = JSON.parse(fs.readFileSync(path.join(taskDir, 'run.json'), 'utf8'))
+  assert.ok(runs[0].stall_evidence)
+  assert.equal(runs[0].stall_evidence.waited_ms, 90000)
+})
+
+
+test('flow failure writes failure.json with blocked reason and AC evidence', async (t) => {
+  const { repo, taskDir } = makeRepo()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  const runner = path.join(repo, 'runner.ps1')
+  fs.writeFileSync(runner, '', 'utf8')
+  const adapterFactory = () => ({ async run() { return { exitCode: 1, error: 'boom' } } })
+  const config = configFor()
+  const code = await runFlow({
+    config, repo, taskId: '001', runnerPath: runner,
+    args: { 'in-place': true }, adapterFactory, log: () => {},
+  })
+  assert.equal(code, 1)
+  const failure = JSON.parse(fs.readFileSync(path.join(taskDir, 'failure.json'), 'utf8'))
+  assert.equal(failure.schema, 'agentline.failure/v1')
+  assert.equal(failure.blocked_reason, 'run_failed')
+  assert.ok(Array.isArray(failure.last_calls))
 })

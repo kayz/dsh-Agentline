@@ -117,6 +117,9 @@ export function runProcess({
     let stderr = ''
     let timedOut = false
     let abortedReason = null
+    let sawClassifiedEvent = false
+    let lastEventType = null
+    let stallEvidence = null
     const watchdog = (!classify && stallMinutes !== 0)
       ? createWatchdog({ stallMs: (stallMinutes ?? 10) * 60_000 })
       : null
@@ -150,7 +153,15 @@ export function runProcess({
             ? Math.max(0.01, toolStallMinutes) * 60_000
             : Math.max(0.01, apiStallSeconds) * 1000
           if (idle > limitMs) {
-            abortedReason = activeTools.size > 0 ? 'tool_stall' : 'stall'
+            abortedReason = activeTools.size > 0
+              ? 'tool_stall'
+              : (sawClassifiedEvent ? 'E_STALL_MID_STREAM' : 'E_STALL_FIRST_BYTE')
+            stallEvidence = {
+              waited_ms: idle,
+              limit_ms: limitMs,
+              last_event_type: lastEventType,
+              active_tools: activeTools.size,
+            }
             killTree()
           }
         }, 5_000)
@@ -186,6 +197,8 @@ export function runProcess({
           killTree()
           return
         }
+        sawClassifiedEvent = true
+        lastEventType = evt.kind || 'activity'
         if (evt.kind === 'tool_start') activeTools.add(evt.id || ('t' + (++toolSeq)))
         else if (evt.kind === 'tool_end') {
           if (evt.id) activeTools.delete(evt.id)
@@ -213,7 +226,7 @@ export function runProcess({
       clearTimeout(timer)
       if (stallTimer) clearInterval(stallTimer)
       if (heartbeat) clearInterval(heartbeat)
-      if (abortedReason) payload = { ...payload, exitCode: 125, abortedReason, error: abortedReason }
+      if (abortedReason) payload = { ...payload, exitCode: 125, abortedReason, error: abortedReason, ...(stallEvidence ? { stall_evidence: stallEvidence } : {}) }
       if (stream) {
         try {
           stream.write(`\n=== EXIT ${payload.exitCode} timedOut=${payload.timedOut}${abortedReason ? ' aborted=' + abortedReason : ''} ===\n`)
