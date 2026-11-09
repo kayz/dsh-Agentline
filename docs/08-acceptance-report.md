@@ -164,3 +164,31 @@ T-043 连续三轮提问，每一轮都是真实空洞：issues API 字段与测
 ### 一个被 T-041 立刻抓到的真实过期
 
 给 T-044 补追踪分片后，`check-generated-fresh` **立刻失败**：release-gate 夹具内嵌 traceability 分片副本，新增 `T-044.json` 就让 42 个夹具过期。这正是 T-041 存在的意义 —— 在此之前，这种过期只有在别人的干净 worktree 里才会炸。
+## AC-038 闭环：真机 WSL 冒烟通过（2026-11-09 16:25）
+
+此前 AC-038 一直登记为「待环境验证」：本机 WSL（Ubuntu-24.04）内没有 Node 20+，`wsl.exe -d Ubuntu-24.04 --exec node --version` 返回 `execvpe(node) failed: No such file or directory`。
+
+经用户授权，在 WSL 内以 root 安装官方 Node 20：
+
+```bash
+# 下载中断后断点续传（首次 120s 超时，10.4MB/25MB）
+curl -fsSL -C - --max-time 540 https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz -o /tmp/node20.tar.xz
+tar -xJf /tmp/node20.tar.xz -C /usr/local --strip-components=1
+# => /usr/local/bin/node v20.18.0
+```
+
+随后真机冒烟结果：
+
+| 项 | 结果 |
+|---|---|
+| `CLIWORKER_SMOKE=1 node scripts/smoke-real.mjs --out <tmp>` | **exit 0，7 步全部 pass** |
+| `wsl-discover` 步骤 | **pass**（7.07s，真实枚举发行版并执行发现） |
+| `CLIWORKER_SMOKE=1 node --test test/smoke/wsl-discover.test.mjs` | **2 pass / 0 fail** |
+| 报告 mode | `real`（非 dry-run） |
+
+**结论：AC-038 由「待环境验证」升级为「真机已验证」。** 全程未使用夹具替代、未把 skip 折算为通过。
+
+### 环境改动记录
+
+- 在 WSL `Ubuntu-24.04` 的 `/usr/local` 下安装了 Node v20.18.0（官方二进制 tarball，未使用 apt、未改系统包）
+- 未来重跑真机冒烟只需：`$env:CLIWORKER_SMOKE=1; node scripts/smoke-real.mjs --out <仓库外路径>`
