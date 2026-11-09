@@ -1022,6 +1022,35 @@ export function apply(ctx, config) {
       })
 
       // 只读：模型目录与 Provider 发现缓存（转发 orchestrator 的 config + model-catalog，不写盘）
+      // 模型来源：AgentLine 只代理 CLIWorker，不在插件里管理 Provider/价格/预测。
+      route('/agentline/cliworker', 'agentline: cliworker', async (req, res) => {
+        try {
+          const u = new URL(req.url || '/', 'http://localhost')
+          const action = u.searchParams.get('action') || (req.method === 'POST' ? 'select' : 'models')
+          let argv
+          if (req.method === 'POST' || action === 'select') {
+            const body = await readBody(req)
+            const level = String((body && body.level) || u.searchParams.get('level') || 'Top')
+            const count = Number((body && body.count) || u.searchParams.get('count') || 1)
+            const usage = String((body && body.usage) || u.searchParams.get('usage') || 'Normal')
+            argv = [agentlineCli(), 'models', 'source', 'select', '--level', level, '--count', String(count), '--usage', usage]
+          } else {
+            argv = [agentlineCli(), 'models', 'source', 'models']
+          }
+          const child = spawn(nodeBin(), argv, { cwd: agentlineHome(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+          let out = ''
+          let err = ''
+          child.stdout.on('data', (d) => { out += d.toString() })
+          child.stderr.on('data', (d) => { err += d.toString() })
+          const code = await new Promise((resolve) => {
+            const timer = setTimeout(() => { try { child.kill() } catch { /* ignore */ } resolve(124) }, 60_000)
+            child.on('close', (c) => { clearTimeout(timer); resolve(c ?? -1) })
+          })
+          if (code !== 0) return sendJson(res, { ok: false, error: (err || out || `exit ${code}`).slice(-2000) }, 502)
+          try { sendJson(res, JSON.parse(out)) } catch { sendJson(res, { ok: false, error: 'CLIWorker returned invalid JSON' }, 502) }
+        } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }, 500) }
+      })
+
       route('/agentline/catalog', 'agentline: catalog', async (req, res) => {
         try {
           if (req.method && req.method !== 'GET') return sendJson(res, { ok: false, error: 'GET only' }, 405)

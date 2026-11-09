@@ -495,8 +495,8 @@ test('studio ui: five tabs, Inbox, portfolio, legacy task controls and unimpleme
   const root = await mountCockpit()
   await settle(root)
 
-  assert.equal(findAllById(root, 'tab-').length, 5)
-  assert.deepEqual(['home', 'studio', 'blueprint', 'build', 'settings'].map((id) => textOfId(root, 'tab-' + id)), ['首页', 'Studio', 'Blueprint', 'Build', '设置'])
+  assert.equal(findAllById(root, 'tab-').length, 6)
+  assert.deepEqual(['home', 'studio', 'blueprint', 'build', 'models', 'settings'].map((id) => textOfId(root, 'tab-' + id)), ['首页', 'Studio', 'Blueprint', 'Build', '模型', '设置'])
   assert.ok(findAllById(root, 'project-select').length >= 1)
   assert.match(textOf(root.tree), /项目组合/)
   assert.match(textOf(root.tree), /待处理/)
@@ -981,4 +981,5 @@ test('studio host route: corrupt associated evidence is an error, not empty or o
   assert.equal(missingEvidence.body.state, 'corrupt')
   assert.match(missingEvidence.body.error, /missing/)
 })
+
 

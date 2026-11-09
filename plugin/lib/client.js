@@ -73,6 +73,20 @@ window.__ModuleLoader__.load({
       '.agl-box{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:rgba(255,255,255,.02);min-width:0;overflow-x:auto}',
       '.agl-box h4{margin:0 0 8px;font-size:11px;letter-spacing:.06em;color:#8b949e;font-weight:600}',
       '.agl-btn:disabled,.agl-icon:disabled{opacity:.45;cursor:default}',
+      '.agl-hero{display:flex;gap:14px;align-items:center;justify-content:space-between;border:1px solid rgba(88,166,255,.22);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:linear-gradient(180deg,rgba(88,166,255,.09),rgba(88,166,255,.015))}',
+      '.agl-hero h3{margin:0;font-size:15px}',
+      '.agl-kpis{display:flex;gap:8px;flex-wrap:wrap}',
+      '.agl-kpi{min-width:86px;padding:7px 10px;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:rgba(0,0,0,.12)}',
+      '.agl-kpi b{display:block;font-size:18px;font-variant-numeric:tabular-nums}',
+      '.agl-kpi span{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.06em}',
+      '.agl-model-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}',
+      '@media(max-width:980px){.agl-model-grid{grid-template-columns:1fr}}',
+      '.agl-model{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06)}',
+      '.agl-model:last-child{border-bottom:0}',
+      '.agl-model .mk{min-width:0;flex:1}',
+      '.agl-model .mk b{display:block;font:12px/1.4 ui-monospace,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.agl-model .mk span{font-size:11px;color:#8b949e}',
+      '.agl-av{font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid rgba(255,255,255,.14)}',
     ].join('\n')
 
     if (typeof document !== 'undefined' && document.head) {
@@ -105,7 +119,7 @@ window.__ModuleLoader__.load({
       reviewed: '#3fb950', pr_open: '#a371f7', merged: '#3fb950', blocked: '#f85149',
     }
     const STAGES = ['draft', 'designed', 'implemented', 'reviewable', 'reviewed', 'pr_open', 'merged']
-    const TABS = [['home', '首页'], ['studio', 'Studio'], ['blueprint', 'Blueprint'], ['build', 'Build'], ['settings', '设置']]
+    const TABS = [['home', '首页'], ['studio', 'Studio'], ['blueprint', 'Blueprint'], ['build', 'Build'], ['models', '模型'], ['settings', '设置']]
     const TAB_IDS = TABS.map((t) => t[0])
     const SLASH_COMMANDS = [
       { cmd: '/agentline', desc: '显示当前工作区的任务数与运行中数量', ok: true },
@@ -393,6 +407,12 @@ window.__ModuleLoader__.load({
       const [catalogQuery, setCatalogQuery] = React.useState('')
       const [channelFilter, setChannelFilter] = React.useState('all')
       const [collapsedChannels, setCollapsedChannels] = React.useState({})
+      const [cw, setCw] = React.useState(null)
+      const [cwSel, setCwSel] = React.useState(null)
+      const [cwBusy, setCwBusy] = React.useState(false)
+      const [cwLevel, setCwLevel] = React.useState('Top')
+      const [cwCount, setCwCount] = React.useState(2)
+      const [cwUsage, setCwUsage] = React.useState('Normal')
 
       // 访问代次区分 A → B → A；任务代次同时隔离同项目内的切换和写操作反馈。
       const view = React.useRef({ alive: true, epoch: 0, taskEpoch: 0 })
@@ -859,9 +879,25 @@ window.__ModuleLoader__.load({
         setLiveReady(!!(r && r.ok))
         setLive(r && r.ok ? r.running || [] : [])
       }
+      const loadCw = async () => {
+        const r = await j('/agentline/cliworker?action=models')
+        setCw(r && r.ok ? { ...r, at: new Date().toISOString(), source: 'CLIWorker' } : { ok: false, error: failure(r), at: new Date().toISOString(), source: 'CLIWorker' })
+      }
+      const pickCw = async () => {
+        setCwBusy(true)
+        try {
+          const res = await fetch('/agentline/cliworker', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ level: cwLevel, count: Number(cwCount) || 1, usage: cwUsage }),
+          }).then((x) => x.json()).catch(() => null)
+          setCwSel(res && res.ok ? res : { ok: false, error: failure(res) })
+        } finally { setCwBusy(false) }
+      }
+
       const refresh = () => {
         loadProjects(); loadLive()
         if (tab === 'settings') { loadRouting(project); loadModels(); loadCatalog() }
+        else if (tab === 'models') loadCw()
         else { loadSummary(); loadNotices(); loadPipeline(project); loadList(project); loadDetail(current, project) }
       }
 
@@ -877,6 +913,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (tab === 'settings') { loadRouting(project); loadModels(); loadCatalog() }
+        if (tab === 'models') loadCw()
       }, [tab, project])
 
       React.useEffect(() => {
@@ -1439,6 +1476,73 @@ window.__ModuleLoader__.load({
           h('button', { className: 'agl-icon', title: '设置', onClick: () => setTab('settings') }, '⚙'),
         )
 
+      const renderModels = () => {
+        const models = cw && cw.ok ? (cw.models || []) : []
+        const providers = [...new Set(models.map((m) => m.provider).filter(Boolean))].sort()
+        const levels = ['Top', 'High', 'Middle', 'Quick']
+        const status = cw === null ? '读取中…' : !cw.ok ? 'CLIWorker 连接失败' : 'connected'
+        const selected = cwSel && cwSel.ok ? (cwSel.models || []) : []
+        return h('div', { className: 'agl-page', 'data-testid': 'models-page' },
+          h('div', { className: 'agl-hero' },
+            h('div', null,
+              h('h3', null, '模型来源 · CLIWorker'),
+              h('div', { className: 'agl-fine' }, 'Provider / 模型 / 身份 / 价格 / 额度 / 选择全部由 CLIWorker 管理；AgentLine 只保存来源指针。'),
+              h('div', { className: 'agl-route', style: { marginTop: '6px' } },
+                h('span', { className: 'agl-av', style: { color: cw && cw.ok ? '#3fb950' : cw ? '#f85149' : '#8b949e' } }, '● ' + status),
+                cw && cw.ok ? h('span', { className: 'agl-fine' }, 'models=' + models.length + ' · providers=' + providers.length) : null)),
+            h('div', { className: 'agl-kpis' },
+              h('div', { className: 'agl-kpi' }, h('b', null, models.length), h('span', null, '模型')),
+              h('div', { className: 'agl-kpi' }, h('b', null, providers.length), h('span', null, 'Provider')),
+              h('div', { className: 'agl-kpi' }, h('b', null, models.filter((m) => m.availability === 'callable').length), h('span', null, 'callable')))),
+          cw && !cw.ok ? h('div', { className: 'agl-box', 'data-testid': 'models-error' },
+            h('div', null, '无法连接 CLIWorker：' + (cw.error || 'unknown')),
+            h('button', { className: 'agl-btn', onClick: loadCw }, '重试')) : null,
+          h('div', { className: 'agl-model-grid' },
+            h('div', { className: 'agl-box' },
+              h('h4', null, '选择预览'),
+              h('div', { className: 'agl-route' },
+                h('label', { className: 'agl-fine' }, '级别 ',
+                  h('select', { value: cwLevel, onChange: (e) => setCwLevel(e.target.value), 'data-testid': 'cw-level' },
+                    levels.map((x) => h('option', { key: x, value: x }, x)))),
+                h('label', { className: 'agl-fine' }, '数量 ',
+                  h('input', { className: 'agl-input', style: { minWidth: '56px', width: '56px' }, type: 'number', min: 1, max: 10, value: cwCount, onChange: (e) => setCwCount(e.target.value) })),
+                h('label', { className: 'agl-fine' }, '用量 ',
+                  h('select', { value: cwUsage, onChange: (e) => setCwUsage(e.target.value), 'data-testid': 'cw-usage' },
+                    ['Heavy', 'Normal', 'Light'].map((x) => h('option', { key: x, value: x }, x))))),
+              h('div', { className: 'agl-route' },
+                h('button', { className: 'agl-btn', disabled: cwBusy, onClick: pickCw, 'data-testid': 'cw-select' }, cwBusy ? '请求中…' : '获取模型'),
+                h('span', { className: 'agl-fine' }, '只请求 level/count/usage；不拉全量模型列表')),
+              cwSel && !cwSel.ok ? h('div', { className: 'agl-fine', style: { color: '#f85149' } }, '选择失败：' + (cwSel.error || 'unknown')) : null,
+              selected.length ? h('table', { className: 'agl-t', 'data-testid': 'cw-selection' },
+                h('thead', null, h('tr', null, ['模型', 'CLI', '级别', '身份'].map((x) => h('th', { key: x }, x)))),
+                h('tbody', null, selected.map((m) => h('tr', { key: m.key },
+                  h('td', { className: 'mono' }, m.key), h('td', null, (m.call && m.call.command) || '—'),
+                  h('td', null, m.level || '—'), h('td', null, m.identity || '—'))))) : null),
+            h('div', { className: 'agl-box' },
+              h('h4', null, 'CLIWorker 状态'),
+              cw === null ? h('div', { className: 'agl-fine' }, '读取中…') :
+                h('div', { className: 'agl-fine' },
+                  h('div', null, '来源：' + (cw.source || 'modelSource')),
+                  h('div', null, '错误：' + (cw.error || '无')),
+                  h('div', null, '最近读取：' + when(cw.at)),
+                  h('button', { className: 'agl-btn', onClick: loadCw }, '刷新模型目录')))),
+          levels.map((level) => {
+            const rows = models.filter((m) => (m.level || 'Quick') === level)
+            if (!rows.length) return null
+            return h('div', { className: 'agl-box', key: level, 'data-testid': 'cw-level-' + level },
+              h('h4', null, level + ' · ' + rows.length),
+              h('table', { className: 'agl-t' },
+                h('thead', null, h('tr', null, ['模型', 'Provider', '身份', '可用性', '价格 in/out', '预测'].map((x) => h('th', { key: x }, x)))),
+                h('tbody', null, rows.map((m) => h('tr', { key: m.key },
+                  h('td', { className: 'mono' }, m.key),
+                  h('td', null, m.provider || '—'),
+                  h('td', null, m.identity || 'unverified'),
+                  h('td', null, m.availability || 'unknown'),
+                  h('td', { className: 'agl-fine' }, m.prices ? `${m.prices.input_per_mtok}/${m.prices.output_per_mtok}` : '—'),
+                  h('td', { className: 'agl-fine' }, m.forecast ? (m.forecast.risk || 'unknown') : 'unknown'))))))
+          }))
+      }
+
       const renderSettings = () => h(React.Fragment, null,
         h('div', { className: 'agl-box' },
           h('h4', null, '角色路由 · 仅影响本项目'),
@@ -1714,7 +1818,7 @@ window.__ModuleLoader__.load({
         }, title, id === 'home' && pending > 0 ? h('span', { className: 'agl-badge' }, pending) : null))),
         err ? h('div', { className: 'agl-empty' }, err) : null,
         tab === 'build' ? renderBuild() : h('div', { className: 'agl-page' },
-          tab === 'home' ? renderHome() : tab === 'studio' ? renderStudio() : tab === 'blueprint' ? renderBlueprint() : renderSettings()),
+          tab === 'home' ? renderHome() : tab === 'studio' ? renderStudio() : tab === 'blueprint' ? renderBlueprint() : tab === 'models' ? renderModels() : renderSettings()),
       )
     }
 
@@ -1973,6 +2077,8 @@ window.__ModuleLoader__.load({
     return module.exports
   },
 })
+
+
 
 
 

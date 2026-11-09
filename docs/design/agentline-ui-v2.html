@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentLine UI v2 · mockup</title>
+<style>
+  :root{
+    --bg:#0b0d10; --surface:#111418; --surface2:#151a20; --border:#232a33;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+    --radius:12px; --gap:12px;
+  }
+  html[data-theme="light"]{
+    --bg:#f6f7f9; --surface:#fff; --surface2:#f0f2f5; --border:#dfe3e8;
+    --text:#1f2328; --muted:#656d76; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:13px/1.55 -apple-system,"Segoe UI",sans-serif}
+  .shell{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
+  .rail{background:var(--surface);border-right:1px solid var(--border);padding:14px 10px;display:flex;flex-direction:column;gap:4px}
+  .brand{display:flex;align-items:center;gap:9px;padding:6px 10px 16px;font-weight:700;letter-spacing:.02em}
+  .logo{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--accent),#a371f7);display:grid;place-items:center;color:#fff;font-size:12px}
+  .nav{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;color:var(--muted);cursor:pointer;border:1px solid transparent}
+  .nav:hover{background:var(--surface2);color:var(--text)}
+  .nav.on{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);color:var(--text)}
+  .nav .ico{width:16px;text-align:center;opacity:.85}
+  .rail-foot{margin-top:auto;padding:10px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}
+  .main{min-width:0;display:flex;flex-direction:column}
+  .top{height:52px;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid var(--border);background:var(--surface)}
+  .crumb{font-weight:600}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;font-size:11px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  .spacer{flex:1}
+  .btn{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .content{padding:22px;max-width:1200px;width:100%;margin:0 auto}
+  h1{margin:0 0 4px;font-size:20px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin-bottom:18px}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--gap)}
+  .stack{display:flex;flex-direction:column;gap:var(--gap)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .card h2{margin:0 0 10px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .between{justify-content:space-between}
+  .stat{display:flex;flex-direction:column;gap:2px;min-width:80px}
+  .stat b{font-size:20px;font-variant-numeric:tabular-nums}
+  .stat span{font-size:11px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:11px}
+  .tag{display:inline-flex;padding:1px 6px;border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--muted)}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .muted{color:var(--muted)}
+  .mono{font-family:ui-monospace,Consolas,monospace}
+  .hero{display:flex;align-items:center;gap:12px;justify-content:space-between;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 8%,transparent),transparent);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+  .field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+  .field select,.field input{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:5px 8px;font-size:12px}
+  .empty{padding:30px;text-align:center;color:var(--muted);border:1px dashed var(--border);border-radius:10px}
+  .sidebar-note{font-size:11px;color:var(--muted);padding:8px 10px}
+  .thesis{font-size:12px;color:var(--muted);margin-top:6px}
+  @media(max-width:900px){.shell{grid-template-columns:1fr}.rail{display:none}.grid{grid-template-columns:1fr}.content{padding:14px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand"><span class="logo">A</span><span>AgentLine</span></div>
+    <div class="nav on"><span class="ico">◈</span>概览</div>
+    <div class="nav"><span class="ico">✧</span>Studio</div>
+    <div class="nav"><span class="ico">◇</span>Blueprint</div>
+    <div class="nav"><span class="ico">▣</span>Build</div>
+    <div class="nav"><span class="ico">◎</span>模型</div>
+    <div class="nav"><span class="ico">⚙</span>设置</div>
+    <div class="sidebar-note">模型由 CLIWorker 管理<br>AgentLine 只保存来源指针</div>
+    <div class="rail-foot">● 运行中 2 · 待处理 3<br>dsh-Agentline</div>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <span class="crumb">dsh-Agentline</span>
+      <span class="pill"><span class="dot"></span>空闲</span>
+      <span class="spacer"></span>
+      <span class="pill">CLIWorker <b class="ok">connected</b></span>
+      <button class="btn" id="theme">◐ 主题</button>
+      <button class="btn primary">刷新</button>
+    </header>
+
+    <div class="content">
+      <h1>概览</h1>
+      <div class="sub">项目组合、待处理事项和当前运行状态 · 所有数据来自真实 CLI / API，不伪造</div>
+
+      <div class="hero">
+        <div>
+          <div class="muted" style="font-size:11px">当前项目</div>
+          <div style="font-size:16px;font-weight:600">dsh-Agentline</div>
+          <div class="thesis">main · 7 个任务 · 2 个运行中 · 1 个待合并</div>
+        </div>
+        <div class="row">
+          <span class="pill">Studio <b class="ok">1</b></span>
+          <span class="pill">Blueprint <b class="warn">2</b></span>
+          <span class="pill">Build <b class="ok">4</b></span>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:12px">
+        <section class="card">
+          <h2>项目组合</h2>
+          <table>
+            <thead><tr><th>项目</th><th>Studio</th><th>Blueprint</th><th>Build</th><th>待处理</th></tr></thead>
+            <tbody>
+              <tr><td><b>dsh-Agentline</b><div class="muted mono">C:\git\dsh-Agentline</div></td><td><span class="tag">1</span></td><td><span class="tag warn">2/3</span></td><td><span class="tag ok">4/9</span></td><td><span class="bad">3</span></td></tr>
+              <tr><td><b>dsh-CLIWorker</b><div class="muted mono">C:\git\dsh-CLIWorker</div></td><td><span class="tag">0</span></td><td><span class="tag">—</span></td><td><span class="tag ok">12/12</span></td><td><span class="muted">0</span></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Inbox</h2>
+          <div class="stack">
+            <div class="row between"><span><b class="warn">Blueprint</b> 等待评审 · 第 2/3 轮</span><span class="muted">6m</span></div>
+            <div class="row between"><span><b class="ok">G1</b> 可批准 · 12/12 通过（1 豁免）</span><span class="muted">2m</span></div>
+            <div class="row between"><span><b>Build</b> T-044 待合并</span><span class="muted">18m</span></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>运行中</h2>
+          <div class="stack">
+            <div class="row between"><span>Build 004 · dev r1</span><span class="tag">gpt-6.1-terra</span><span class="muted">12m</span></div>
+            <div class="row between"><span>Blueprint r2 · review</span><span class="tag">hy4std</span><span class="muted">6m</span></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>最近事件</h2>
+          <div class="stack muted">
+            <div>10:41 Blueprint r2 testability 完成：0 blocker</div>
+            <div>10:38 CI 12/12 通过</div>
+            <div>10:32 模型来源已连接 CLIWorker</div>
+          </div>
+        </section>
+      </div>
+
+      <h1 style="margin-top:26px">模型</h1>
+      <div class="sub">由 CLIWorker 管理 Provider、模型、身份、价格、额度与预测</div>
+
+      <div class="hero">
+        <div>
+          <div class="muted" style="font-size:11px">模型来源</div>
+          <div style="font-size:16px;font-weight:600">CLIWorker <span class="ok">● connected</span></div>
+          <div class="thesis mono">C:\git\dsh-CLIWorker · 0.2.0 · 最近同步 10:32</div>
+        </div>
+        <div class="row">
+          <span class="pill">Provider <b>5</b></span>
+          <span class="pill">模型 <b>28</b></span>
+          <span class="pill">未验证 <b class="warn">6</b></span>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:12px">
+        <section class="card">
+          <h2>选择预览</h2>
+          <div class="row">
+            <label class="field">级别<select><option>Top</option><option>High</option><option>Middle</option><option>Quick</option></select></label>
+            <label class="field">数量<input value="2"></label>
+            <label class="field">用量<select><option>Heavy</option><option>Normal</option><option>Light</option></select></label>
+            <button class="btn primary" style="align-self:end">获取模型</button>
+          </div>
+          <div class="thesis">返回 CLI 调用：</div>
+          <table>
+            <thead><tr><th>模型</th><th>CLI</th><th>级别</th><th>身份</th><th>预测</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">hy4free</td><td>codebuddy</td><td>Top</td><td><span class="ok">verified</span></td><td><span class="ok">剩余 12 任务</span></td></tr>
+              <tr><td class="mono">claude-opus-5-5</td><td>claude</td><td>Top</td><td><span class="ok">verified</span></td><td><span class="ok">剩余 30 任务</span></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Provider 状态</h2>
+          <table>
+            <thead><tr><th>Provider</th><th>CLI</th><th>认证</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td>Claude</td><td class="mono">claude</td><td class="ok">ok</td><td class="ok">callable</td></tr>
+              <tr><td>Codex</td><td class="mono">codex</td><td class="ok">ok</td><td class="ok">callable</td></tr>
+              <tr><td>CodeBuddy</td><td class="mono">codebuddy</td><td class="ok">ok</td><td class="ok">callable</td></tr>
+              <tr><td>Cursor WSL</td><td class="mono">wsl agent</td><td class="ok">ok</td><td class="warn">unverified</td></tr>
+              <tr><td>Gemini</td><td class="mono">gemini</td><td class="bad">missing</td><td class="bad">unavailable</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <section class="card" style="margin-top:12px">
+        <div class="row between">
+          <h2 style="margin:0">模型目录</h2>
+          <div class="row">
+            <select><option>全部 Provider</option></select>
+            <select><option>全部级别</option></select>
+            <select><option>可用性</option></select>
+            <input placeholder="搜索模型…">
+          </div>
+        </div>
+        <table style="margin-top:8px">
+          <thead><tr><th>模型</th><th>级别</th><th>身份</th><th>可用性</th><th>预测</th><th>价格 in/out</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">claude-opus-5-5</td><td>Top</td><td class="ok">verified</td><td class="ok">callable</td><td class="ok">30 tasks</td><td>15 / 75</td></tr>
+            <tr><td class="mono">hy4free</td><td>Top</td><td class="ok">verified</td><td class="ok">callable</td><td class="ok">12 tasks</td><td>0 / 0</td></tr>
+            <tr><td class="mono">gpt-6.1-sol</td><td>Top</td><td class="warn">observed</td><td class="ok">callable</td><td class="warn">unknown</td><td>2 / 12</td></tr>
+            <tr><td class="mono">gemini-4-argon-high</td><td>High</td><td class="warn">unverified</td><td class="bad">unavailable</td><td class="muted">unknown</td><td>1.25 / 10</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <div class="empty" style="margin-top:16px">静态 mockup · 真实数据由 CLIWorker 提供；缺失状态显示 unknown，不伪造</div>
+    </div>
+  </main>
+</div>
+<script>
+  const root = document.documentElement
+  const saved = localStorage.getItem('agentline.theme')
+  if (saved) root.dataset.theme = saved
+  document.getElementById('theme').onclick = () => {
+    const next = root.dataset.theme === 'light' ? 'dark' : 'light'
+    root.dataset.theme = next
+    localStorage.setItem('agentline.theme', next)
+  }
+</script>
+</body>
+</html>

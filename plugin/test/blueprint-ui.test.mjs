@@ -651,10 +651,10 @@ test.describe('blueprint ui', { concurrency: 1 }, () => {
     }))
     const root = await mountCockpit()
     await settle(root)
-    assert.equal(findAllById(root, 'tab-').length, 5)
-    const tabText = ['home', 'studio', 'blueprint', 'build', 'settings'].map((id) => textOfId(root, 'tab-' + id))
+    assert.equal(findAllById(root, 'tab-').length, 6)
+    const tabText = ['home', 'studio', 'blueprint', 'build', 'models', 'settings'].map((id) => textOfId(root, 'tab-' + id))
     assert.match(tabText[0], /^首页/)
-    assert.deepEqual(tabText.slice(1), ['Studio', 'Blueprint', 'Build', '设置'])
+    assert.deepEqual(tabText.slice(1), ['Studio', 'Blueprint', 'Build', '模型', '设置'])
     assert.match(textOf(root.tree), /项目组合/)
 
     click(root, findById(root, 'tab-studio'))
@@ -675,3 +675,4 @@ test.describe('blueprint ui', { concurrency: 1 }, () => {
     assert.ok(findById(root, 'blueprint-empty'))
   })
 })
+
