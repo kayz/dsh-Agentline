@@ -32,7 +32,7 @@ import {
 } from './lib/blueprint.mjs'
 import { discoverAll, saveDiscovery, discoverySummary, setRoleCandidates, addModel, formatModelTable } from './lib/models.mjs'
 import { buildCatalog } from './lib/model-catalog.mjs'
-import { requestModels } from './lib/cliworker-client.mjs'
+import { requestModels, listModels } from './lib/cliworker-client.mjs'
 import { effectiveRole, readProject } from './lib/routing.mjs'
 import { executeRole, readVerdict } from './lib/exec.mjs'
 import { readState, writeState, appendRun } from './lib/state.mjs'
@@ -151,6 +151,25 @@ async function cmdModels() {
       log(`${row.provider}: source=${row.source} models=${row.models}${row.warnings.length ? ' warnings=' + row.warnings.join('; ') : ''}`)
     }
     return
+  }
+  if (sub === 'source') {
+    const action = args._[2] || 'models'
+    if (action === 'models') {
+      log(JSON.stringify(await listModels(config), null, 2))
+      return
+    }
+    if (action === 'select') {
+      if (!args.level) fail('models source select requires --level Top|High|Middle|Quick')
+      log(JSON.stringify(await requestModels(config, {
+        level: args.level,
+        count: Number(args.count || 1),
+        usage: args.usage || 'Normal',
+        importance: args.importance || undefined,
+        require_readonly: args['require-readonly'] === true,
+      }), null, 2))
+      return
+    }
+    fail('usage: agentline models source models|select --level ...')
   }
   if (sub === 'request') {
     if (!args.level) fail('models request requires --level Top|High|Middle|Quick')
