@@ -1047,7 +1047,7 @@ export function apply(ctx, config) {
             child.on('close', (c) => { clearTimeout(timer); resolve(c ?? -1) })
           })
           if (code !== 0) return sendJson(res, { ok: false, error: (err || out || `exit ${code}`).slice(-2000) }, 502)
-          try { sendJson(res, JSON.parse(out)) } catch { sendJson(res, { ok: false, error: 'CLIWorker returned invalid JSON' }, 502) }
+          try { sendJson(res, { ok: true, ...JSON.parse(out) }) } catch { sendJson(res, { ok: false, error: 'CLIWorker returned invalid JSON' }, 502) }
         } catch (e) { sendJson(res, { ok: false, error: String(e.message || e) }, 500) }
       })
 
